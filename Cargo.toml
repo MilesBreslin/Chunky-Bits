@@ -1,0 +1,22 @@
+[package]
+name = "chunky-bits"
+version = "0.1.0"
+authors = ["Miles Breslin <milesbreslin@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1"
+futures = "0.3"
+hex = { version = "0.4", features = [ "std", "serde" ] }
+rand = { version = "0.8", features = [ "serde" ] }
+reed-solomon-erasure = { version = "4.0" }
+reqwest = { version = "0.11", features = [ "default-tls", "gzip", "brotli" ] }
+rocket = { version = "0.5.0-dev", git = "https://github.com/SergioBenitez/Rocket", features = [ "tls" ]}
+rocket_contrib = { version = "0.5.0-dev", git = "https://github.com/SergioBenitez/Rocket"}
+serde = { version = "1.0", features = [ "derive" ] }
+serde_yaml = "0.8"
+sha2 = { version = "0.9" }
+structopt = "0.3"
+tokio = { version = "1", features = [ "fs", "process", "rt" ] }
+url = { version = "2.2", features = [ "serde" ] }
