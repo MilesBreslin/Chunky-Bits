@@ -18,5 +18,5 @@ serde = { version = "1.0", features = [ "derive" ] }
 serde_yaml = "0.8"
 sha2 = { version = "0.9" }
 structopt = "0.3"
-tokio = { version = "1", features = [ "fs", "process", "rt" ] }
+tokio = { version = "1", features = [ "fs", "io-std", "io-util", "macros", "process", "rt", "rt-multi-thread" ] }
 url = { version = "2.2", features = [ "serde" ] }
