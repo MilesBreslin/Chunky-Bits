@@ -4,6 +4,10 @@ Chunky Bits is simple, unmanaged, distributed HTTP object store tool. It is _not
 
 This is not intended to be a self-contained storage solution. Chunky Bits is a tool that only makes sense in a ecosystem of other common applications and tools. It is up to you to design your own storage solution. See the recommended cluster for more information.
 
+##### Data Loss Warning
+
+This software is currently in an alpha state. This is an education experiment, not a production tool. I take no responsibility for how you use this tool and any data-loss that may incur from it. You have been warned. See [LICENSE](./LICENSE) file for more details.
+
 ### Design
 
 Given a file, Chunky Bits will split it into parts. A file part will consist of `d` data chunks and `p` parity chunks. A single part will be distributed at least `d+p` destinations. A metadata file will be returned containing at least the checksums of each chunk, the locations of each chunk, and the length of the file.
