@@ -12,11 +12,11 @@ hex = { version = "0.4", features = [ "std", "serde" ] }
 rand = { version = "0.8", features = [ "serde" ] }
 reed-solomon-erasure = { version = "4.0" }
 reqwest = { version = "0.11", features = [ "default-tls", "gzip", "brotli" ] }
-rocket = { version = "0.5.0-dev", git = "https://github.com/SergioBenitez/Rocket", features = [ "tls" ]}
-rocket_contrib = { version = "0.5.0-dev", git = "https://github.com/SergioBenitez/Rocket"}
 serde = { version = "1.0", features = [ "derive" ] }
 serde_yaml = "0.8"
 sha2 = { version = "0.9" }
 structopt = "0.3"
 tokio = { version = "1", features = [ "fs", "io-std", "io-util", "macros", "process", "rt", "rt-multi-thread" ] }
+tokio-util = "0.6"
 url = { version = "2.2", features = [ "serde" ] }
+warp = { version = "0.3" }

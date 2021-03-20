@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use futures::{
     stream::{
+        Stream,
         StreamExt,
         FuturesOrdered,
     },
@@ -67,8 +68,8 @@ pub enum Command {
         #[structopt(short,long)]
         cluster: PathBuf,
         /// Address to listen on
-        #[structopt(short,long)]
-        listen_addr: HttpUrl,
+        #[structopt(short, long, default_value = "127.0.0.1:8000")]
+        listen_addr: std::net::SocketAddr,
     },
     /// Put a file in the cluster
     Put{
@@ -181,6 +182,7 @@ impl std::fmt::Display for Error {
     }
 }
 
+/*
 #[rocket::get("/<file..>")]
 async fn index_get(state: rocket::State<'_, Cluster>, file: PathBuf) -> rocket::response::Stream<impl AsyncRead + Unpin> {
     let cluster = state.inner();
@@ -196,17 +198,63 @@ async fn index_put(state: rocket::State<'_, Cluster>, data: rocket::data::Data, 
     let profile = cluster.get_profile(None).unwrap();
     let s = cluster.write_file(&format!("{}", file.display()), &mut writer, &profile).await.unwrap();
 }
+*/
+
+async fn index_get(cluster: Arc<Cluster>, path: warp::path::FullPath) -> Result<impl warp::Reply, std::convert::Infallible> {
+    use warp::Reply;
+    if let Ok(mut s) = cluster.read_file(path.as_str()).await {
+        let mut v = Vec::new();
+        if let Ok(_) = s.read_to_end(&mut v).await {
+            return Ok(warp::reply::with_status(
+                v,
+                warp::http::StatusCode::OK,
+            ));
+        }
+    }
+    Ok(warp::reply::with_status(
+        Vec::<u8>::new(),
+        warp::http::StatusCode::NOT_FOUND,
+    ))
+}
+
+async fn index_put(cluster: Arc<Cluster>, path: warp::path::FullPath, mut body: impl Stream<Item=Result<impl bytes::buf::Buf,warp::Error>> + Unpin) -> Result<impl warp::Reply, std::convert::Infallible> {
+    let profile = cluster.get_profile(None).unwrap();
+    let write = cluster.write_file(
+        path.as_str(),
+        &mut tokio_util::io::StreamReader::new(
+            body.map(|res| -> io::Result<_> {
+                Ok(res.unwrap())
+            })
+        ),
+        &profile,
+    ).await;
+    if let Ok(_) = write {
+        Ok(warp::http::StatusCode::OK)
+    } else {
+        Ok(warp::http::StatusCode::INTERNAL_SERVER_ERROR)
+    }
+}
 
 #[tokio::main]
 async fn main() {
     let Opt{command} = Opt::from_args();
     match command {
         Command::HttpGateway{cluster,listen_addr} => {
-            let cluster: Cluster = serde_yaml::from_reader(std::fs::File::open(&cluster).unwrap()).unwrap();
-            rocket::ignite()
-                .mount("/", rocket::routes![index_get,index_put])
-                .manage(cluster)
-                .launch().await;
+            use warp::Filter;
+            let cluster: Arc<Cluster> = Arc::new(serde_yaml::from_reader(std::fs::File::open(&cluster).unwrap()).unwrap());
+            let cluster_get = cluster.clone();
+            let route_get = warp::get().or(warp::head())
+                .map(move |_| cluster_get.clone())
+                .and(warp::path::full())
+                .and_then(index_get);
+            let route_put = warp::put()
+                .map(move || cluster.clone())
+                .and(warp::path::full())
+                .and(warp::body::stream())
+                .and_then(index_put);
+            warp::serve(route_get.or(route_put))
+                .run(listen_addr)
+                .await;
         },
         Command::Put{file,cluster,filename} => {
             let cluster: Cluster = serde_yaml::from_reader(std::fs::File::open(&cluster).unwrap()).unwrap();
