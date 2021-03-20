@@ -1,38 +1,34 @@
-use async_trait::async_trait;
-use std::path::PathBuf;
-use std::marker::PhantomData;
-use std::convert::TryFrom;
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::fmt;
+use std::{
+    collections::BTreeMap,
+    convert::TryFrom,
+    fmt,
+    marker::PhantomData,
+    path::PathBuf,
+    sync::Arc,
+};
+
 use serde::{
-    Serialize,
-    Deserialize,
     de::DeserializeOwned,
+    Deserialize,
+    Serialize,
 };
 use tokio::{
     fs,
-    io::{
-        self,
-        AsyncRead,
-        AsyncWrite,
-    },
-    process::{
-        self,
-        Command,
-    },
-};
-use crate::{
-    Error,
-    file::{
-        self,
-        WeightedLocation,
-        CollectionDestination,
-        FileReference,
-    },
+    io::AsyncRead,
+    process::Command,
 };
 
-#[derive(Clone,Serialize,Deserialize)]
+use crate::{
+    file::{
+        self,
+        CollectionDestination,
+        FileReference,
+        WeightedLocation,
+    },
+    Error,
+};
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Cluster {
     #[serde(alias = "destination")]
     #[serde(alias = "nodes")]
@@ -44,8 +40,15 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    pub async fn write_file<R>(&self, filename: &str, reader: &mut R, profile: &ClusterProfile) -> Result<(),Error>
-    where   R: AsyncRead + Unpin {
+    pub async fn write_file<R>(
+        &self,
+        filename: &str,
+        reader: &mut R,
+        profile: &ClusterProfile,
+    ) -> Result<(), Error>
+    where
+        R: AsyncRead + Unpin,
+    {
         let destination = self.get_destination(profile).await;
         let file_ref = file::FileReference::from_reader(
             reader,
@@ -53,33 +56,40 @@ impl Cluster {
             1 << profile.get_chunk_size(),
             profile.get_data_chunks(),
             profile.get_parity_chunks(),
-        ).await?;
+        )
+        .await?;
         self.metadata.write(&filename, &file_ref).await?;
         Ok(())
     }
+
     pub async fn get_file_ref(&self, filename: &str) -> Result<FileReference, Error> {
         self.metadata.read(&filename).await
     }
-    pub async fn read_file(&self, filename: &str) -> Result<impl AsyncRead + Unpin,Error> {
+
+    pub async fn read_file(&self, filename: &str) -> Result<impl AsyncRead + Unpin, Error> {
         let file_ref = self.get_file_ref(filename).await?;
-        let (mut reader, mut writer) = tokio::io::duplex(64);
-        tokio::spawn(async move {
-            file_ref.to_writer(&mut writer).await;
-        });
+        let (reader, mut writer) = tokio::io::duplex(64);
+        tokio::spawn(async move { file_ref.to_writer(&mut writer).await });
         Ok(reader)
     }
-    pub async fn get_destination(&self, profile: &ClusterProfile) -> impl CollectionDestination {
+
+    pub async fn get_destination(&self, _profile: &ClusterProfile) -> impl CollectionDestination {
         Into::<Vec<Vec<WeightedLocation>>>::into(self.destinations.clone())
-            .iter_mut().map(|mut d| d.drain(..)).flatten()
+            .iter_mut()
+            .map(|d| d.drain(..))
+            .flatten()
             .collect::<Vec<WeightedLocation>>()
     }
+
     pub fn get_profile<'a, T>(&self, profile: T) -> Option<&'_ ClusterProfile>
-    where   T: Into<Option<&'a str>> {
+    where
+        T: Into<Option<&'a str>>,
+    {
         self.profiles.get(profile)
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[serde(tag = "type")]
 enum MetadataTypes {
@@ -87,23 +97,28 @@ enum MetadataTypes {
 }
 
 impl MetadataTypes {
-    pub async fn write<T,U>(&self, filename: &T, payload: &U) -> Result<(),Error>
-    where   T: std::borrow::Borrow<str>,
-            U: Serialize, {
+    pub async fn write<T, U>(&self, filename: &T, payload: &U) -> Result<(), Error>
+    where
+        T: std::borrow::Borrow<str>,
+        U: Serialize,
+    {
         match self {
             MetadataTypes::Path(meta_path) => meta_path.write(filename, payload).await,
         }
     }
-    pub async fn read<T,U>(&self, filename: &T) -> Result<U,Error>
-    where   T: std::borrow::Borrow<str>,
-            U: DeserializeOwned, {
+
+    pub async fn read<T, U>(&self, filename: &T) -> Result<U, Error>
+    where
+        T: std::borrow::Borrow<str>,
+        U: DeserializeOwned,
+    {
         match self {
             MetadataTypes::Path(meta_path) => meta_path.read(filename).await,
         }
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct MetadataPath {
     #[serde(default)]
     format: MetadataFormat,
@@ -112,16 +127,19 @@ struct MetadataPath {
 }
 
 impl MetadataPath {
-    pub async fn write<T,U>(&self, filename: &T, payload: &U) -> Result<(),Error>
-    where   T: std::borrow::Borrow<str>,
-            U: Serialize {
+    pub async fn write<T, U>(&self, filename: &T, payload: &U) -> Result<(), Error>
+    where
+        T: std::borrow::Borrow<str>,
+        U: Serialize,
+    {
         let payload = self.format.to_string(payload)?;
-        fs::write(&
-            format!("{}/{}", self.path.display(), filename.borrow()),
+        fs::write(
+            &format!("{}/{}", self.path.display(), filename.borrow()),
             payload,
-        ).await?;
+        )
+        .await?;
         if let Some(put_script) = &self.put_script {
-            Command::new("/bin/sh")
+            let _ = Command::new("/bin/sh")
                 .arg("-c")
                 .arg(put_script)
                 .current_dir(&self.path)
@@ -132,17 +150,18 @@ impl MetadataPath {
         }
         Ok(())
     }
-    pub async fn read<T,U>(&self, filename: &T) -> Result<U,Error>
-    where   T: std::borrow::Borrow<str>,
-            U: DeserializeOwned, {
-        let bytes = fs::read(&
-            format!("{}/{}", self.path.display(), filename.borrow()),
-        ).await?;
+
+    pub async fn read<T, U>(&self, filename: &T) -> Result<U, Error>
+    where
+        T: std::borrow::Borrow<str>,
+        U: DeserializeOwned,
+    {
+        let bytes = fs::read(&format!("{}/{}", self.path.display(), filename.borrow())).await?;
         self.format.from_bytes(&bytes)
     }
 }
 
-#[derive(Clone,PartialEq,Eq,Serialize,Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum MetadataFormat {
     Yaml,
@@ -155,46 +174,49 @@ impl Default for MetadataFormat {
 }
 
 impl MetadataFormat {
-    fn to_string<T>(&self, payload: &T) -> Result<String,Error>
-    where   T: Serialize {
+    fn to_string<T>(&self, payload: &T) -> Result<String, Error>
+    where
+        T: Serialize,
+    {
         Ok(serde_yaml::to_string(payload)?)
     }
-    fn from_bytes<T,U>(&self, v: &T) -> Result<U,Error>
-    where   T: AsRef<[u8]>,
-            U: DeserializeOwned {
+
+    fn from_bytes<T, U>(&self, v: &T) -> Result<U, Error>
+    where
+        T: AsRef<[u8]>,
+        U: DeserializeOwned,
+    {
         Ok(serde_yaml::from_slice(v.as_ref())?)
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct ClusterProfiles {
     default: ClusterProfile,
     #[serde(flatten)]
-    custom: BTreeMap<String,ClusterProfile>,
+    custom: BTreeMap<String, ClusterProfile>,
 }
 
 impl ClusterProfiles {
     fn get<'a, T>(&self, profile: T) -> Option<&'_ ClusterProfile>
-    where   T: Into<Option<&'a str>> {
+    where
+        T: Into<Option<&'a str>>,
+    {
         let profile = profile.into();
         match profile {
-            Some("default") | None => {
-                Some(&self.default)
-            },
-            Some(profile) => {
-                self.custom.get(profile)
-            }
+            Some("default") | None => Some(&self.default),
+            Some(profile) => self.custom.get(profile),
         }
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ClusterProfile {
     #[serde(default = "ChunkSize::default")]
     chunk_size: ChunkSize,
-    #[serde(alias="data")]
+    #[serde(alias = "data")]
     data_chunks: DataChunkCount,
-    #[serde(alias="parity")]
+    #[serde(alias = "parity")]
     parity_chunks: ParityChunkCount,
 }
 
@@ -202,15 +224,17 @@ impl ClusterProfile {
     fn get_chunk_size(&self) -> usize {
         self.chunk_size.clone().into()
     }
+
     fn get_data_chunks(&self) -> usize {
-        self.data_chunks.clone().into()   
+        self.data_chunks.clone().into()
     }
+
     fn get_parity_chunks(&self) -> usize {
-        self.parity_chunks.clone().into()   
+        self.parity_chunks.clone().into()
     }
 }
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 #[serde(into = "Vec<Vec<WeightedLocation>>")]
 enum ClusterNodes {
@@ -236,7 +260,7 @@ pub trait SizedInt {
     const NAME: &'static str;
 }
 
-#[derive(Clone,PartialEq,Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SizeError<T: SizedInt>(PhantomData<T>);
 impl<T: SizedInt> SizeError<T> {
     fn new() -> Self {
@@ -244,19 +268,28 @@ impl<T: SizedInt> SizeError<T> {
     }
 }
 impl<T> std::fmt::Display for SizeError<T>
-where   T: SizedInt {
+where
+    T: SizedInt,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{} must be greater than {} and less than {}", T::NAME, T::MIN, T::MAX)
+        write!(
+            f,
+            "{} must be greater than {} and less than {}",
+            T::NAME,
+            T::MIN,
+            T::MAX
+        )
     }
 }
 impl<T> std::fmt::Debug for SizeError<T>
-where   T: SizedInt {
+where
+    T: SizedInt,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "SizeError({})", T::NAME)
     }
 }
-impl<T> std::error::Error for SizeError<T>
-where   T: SizedInt {}
+impl<T> std::error::Error for SizeError<T> where T: SizedInt {}
 
 macro_rules! sized_uint {
     ($type:ident, $closest_int:ident, $max:expr, $min:expr) => {

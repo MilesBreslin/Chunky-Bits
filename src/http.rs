@@ -1,57 +1,32 @@
-use async_trait::async_trait;
-use bytes::Bytes;
-use tokio::{
-    fs::{
-        File,
-    },
-    io::{
-        self,
-        AsyncWrite,
-        AsyncWriteExt,
-        AsyncRead,
-        AsyncReadExt,
-    },
-};
-use futures::{
-    TryStreamExt,
-    stream::{
-        StreamExt,
-    },
-};
 use std::{
-    fmt,
-    borrow::Borrow,
-    path::{
-        Path,
-        PathBuf,
-    },
-    time::{
-        Duration,
-    },
     convert::TryFrom,
+    fmt,
+    time::Duration,
 };
+
+use async_trait::async_trait;
 use reqwest::{
-    get,
     Client,
     ClientBuilder,
     RequestBuilder,
 };
-use url::Url;
-use crate::{
-    Error,
-    file::{
-        ShardWriter,
-        CollectionDestination,
-        Location,
-        HttpUrl,
-    },
-};
 use serde::{
-    Serialize,
     Deserialize,
+    Serialize,
+};
+use url::Url;
+
+use crate::{
+    file::{
+        CollectionDestination,
+        HttpUrl,
+        Location,
+        ShardWriter,
+    },
+    Error,
 };
 
-#[derive(Clone,Serialize,Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(from = "HttpUrl")]
 #[serde(into = "HttpUrl")]
 pub struct HttpFiles {
@@ -65,7 +40,8 @@ impl HttpFiles {
             base: url,
             client: ClientBuilder::new()
                 .connect_timeout(Duration::from_secs(5))
-                .build().unwrap(),
+                .build()
+                .unwrap(),
         }
     }
 }
@@ -84,23 +60,27 @@ impl Into<HttpUrl> for HttpFiles {
 
 #[async_trait]
 impl CollectionDestination for HttpFiles {
-    async fn get_writers<
-        T: fmt::Display + Send + Sync + 'static,
-    >(
+    async fn get_writers<T: fmt::Display + Send + Sync + 'static>(
         &self,
         addrs: &[T],
-    ) -> Result<Vec<(Box<dyn ShardWriter + Unpin + Send + Sync + 'static>, Vec<Location>)>, Error> {
-        let mut fds: Vec<(Box<dyn ShardWriter + Unpin + Send + Sync + 'static>, Vec<Location>)> = vec![];
+    ) -> Result<
+        Vec<(
+            Box<dyn ShardWriter + Unpin + Send + Sync + 'static>,
+            Vec<Location>,
+        )>,
+        Error,
+    > {
+        let mut fds: Vec<(
+            Box<dyn ShardWriter + Unpin + Send + Sync + 'static>,
+            Vec<Location>,
+        )> = vec![];
         for addr in addrs {
             let mut url: Url = self.base.clone().into();
-            let addr = format!("{}",addr);
+            let addr = format!("{}", addr);
             url.path_segments_mut().unwrap().push(&addr);
             fds.push((
-                Box::new(PutWriter{
-                    inner: Some(
-                        self.client
-                            .put(url.clone())
-                    ),
+                Box::new(PutWriter {
+                    inner: Some(self.client.put(url.clone())),
                 }),
                 vec![Location::Http(HttpUrl::try_from(url).unwrap())],
             ))
@@ -115,10 +95,13 @@ struct PutWriter {
 
 #[async_trait]
 impl ShardWriter for PutWriter {
-    async fn write_shard(&mut self, bytes: &[u8]) -> Result<(),Error> {
+    async fn write_shard(&mut self, bytes: &[u8]) -> Result<(), Error> {
         match self.inner.take() {
             Some(cli) => {
-                let response = cli.body(bytes.iter().copied().collect::<Vec<u8>>()).send().await?;
+                let response = cli
+                    .body(bytes.iter().copied().collect::<Vec<u8>>())
+                    .send()
+                    .await?;
                 let status = response.status();
                 if status.is_success() {
                     Ok(())
@@ -126,7 +109,7 @@ impl ShardWriter for PutWriter {
                     Err(Error::HttpStatus(status))
                 }
             },
-            None => Err(Error::ExpiredWriter)
+            None => Err(Error::ExpiredWriter),
         }
     }
 }
