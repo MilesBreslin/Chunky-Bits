@@ -137,6 +137,8 @@ struct MetadataPath {
     format: MetadataFormat,
     path: PathBuf,
     put_script: Option<String>,
+    #[serde(default)]
+    fail_on_script_error: bool,
 }
 
 impl MetadataPath {
@@ -152,7 +154,7 @@ impl MetadataPath {
         )
         .await?;
         if let Some(put_script) = &self.put_script {
-            let _ = Command::new("/bin/sh")
+            let res = Command::new("/bin/sh")
                 .arg("-c")
                 .arg(put_script)
                 .current_dir(&self.path)
@@ -160,6 +162,9 @@ impl MetadataPath {
                 .unwrap()
                 .wait()
                 .await;
+            if self.fail_on_script_error {
+                res?;
+            }
         }
         Ok(())
     }
