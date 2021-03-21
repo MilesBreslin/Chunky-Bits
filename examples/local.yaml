@@ -1,0 +1,23 @@
+# Specify 6 local paths to store the data
+# each path should be a different mounted filesystem
+destinations:
+  - location: /mnt/data1
+  - location: /mnt/data2
+  - location: /mnt/data3
+  - location: /mnt/data4
+  - location: /mnt/data5
+  - location: /mnt/data6
+metadata:
+  # Use a directory as a metadata path
+  type: path
+  # Store files in the yaml format (without the .yml extension)
+  format: yaml
+  # Specify the directory
+  path: ./metadata
+profiles:
+  # Default profile is required
+  default:
+    # You must have at least d+p destinations
+    # In this case, you must have 5 destination
+    data: 3
+    parity: 2

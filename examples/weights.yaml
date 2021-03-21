@@ -1,0 +1,26 @@
+# Weights must be considered with parity in mind
+# Since there are 6 destinations specified, only 1
+# drive will not be selected, but it is now very unlikely
+# that a large drive will not have one of the 5 chunks
+# stored on it.
+destinations:
+  - weight: 2000
+    location: /mnt/bigdrive1
+  - weight: 2000
+    location: /mnt/bigdrive2
+  - weight: 2000
+    location: /mnt/bigdrive3
+  - weight: 500
+    location: /mnt/smalldrive1
+  - weight: 500
+    location: /mnt/smalldrive2
+  - weight: 500
+    location: /mnt/smalldrive3
+metadata:
+  type: path
+  format: yaml
+  path: ./metadata
+profiles:
+  default:
+    data: 3
+    parity: 2

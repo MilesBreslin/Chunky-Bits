@@ -1,0 +1,23 @@
+destinations:
+  - location: http://local1/data
+  - location: http://local2/data
+  - location: http://local3/data
+  - location: http://local4/data
+  - location: http://local5/data
+  - location: http://local6/data
+metadata:
+  # Use a directory as a metadata path
+  type: path
+  # Store files in the yaml format (without the .yml extension)
+  format: yaml
+  # Specify the directory
+  path: ./metadata
+  # On object put, run a script
+  # Interpreted by /bin/sh -c "$put_script"
+  put_script: |
+    git add .
+    git commit -m "WRITE"
+profiles:
+  default:
+    data: 3
+    parity: 2

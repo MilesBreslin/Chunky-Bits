@@ -1,0 +1,41 @@
+# Specify 2 zones, one set of local SSDs and another a remote server with 4 disks
+destinations:
+  ssd:
+    - location: /mnt/ssd1
+    - location: /mnt/ssd2
+    - location: /mnt/ssd3
+    - location: /mnt/ssd4
+  offsite:
+    - location: http://remote/repo1
+    - location: http://remote/repo2
+    - location: http://remote/repo3
+    - location: http://remote/repo4
+metadata:
+  type: path
+  format: yaml
+  path: ./metadata
+profiles:
+  default:
+    data: 3
+    parity: 2
+    # Distribute the data across the zones with no preference
+    # This is the default
+    rules:
+      ssd:
+        minimum: 0
+        ideal: 0
+      offsite:
+        minimum: 0
+        ideal: 0
+  lowlatency:
+    # For low-latency writes, ignore the parity
+    data: 3
+    parity: 0
+    rules:
+      ssd:
+        # Require at least 0 chunks be written to SSDs
+        # This allows for up-to all of the SSD zones to fail
+        # and will fall-back to the offsite location
+        minimum: 0
+        # Write all 3 data chunks to the ssd zone
+        ideal: 3
