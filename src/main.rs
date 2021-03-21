@@ -24,11 +24,21 @@ use tokio::{
     },
     io::{
         self,
-        AsyncReadExt,
         AsyncWrite,
         AsyncWriteExt,
     },
     task,
+};
+use tokio_util::codec::{
+    BytesCodec,
+    FramedRead,
+};
+use warp::{
+    http::{
+        response::Response,
+        StatusCode,
+    },
+    hyper::body::Body,
 };
 
 use crate::{
@@ -193,17 +203,18 @@ impl std::error::Error for Error {}
 async fn index_get(
     cluster: Arc<Cluster>,
     path: warp::path::FullPath,
-) -> Result<impl warp::Reply, std::convert::Infallible> {
-    if let Ok(mut s) = cluster.read_file(path.as_str()).await {
-        let mut v = Vec::new();
-        if let Ok(_) = s.read_to_end(&mut v).await {
-            return Ok(warp::reply::with_status(v, warp::http::StatusCode::OK));
-        }
+) -> Result<Box<dyn warp::Reply>, std::convert::Infallible> {
+    if let Ok(s) = cluster.read_file(path.as_str()).await {
+        let stream = FramedRead::new(s, BytesCodec::new());
+        return Ok(Box::new(warp::reply::with_status(
+            Response::new(Body::wrap_stream(stream)),
+            StatusCode::OK,
+        )));
     }
-    Ok(warp::reply::with_status(
+    return Ok(Box::new(warp::reply::with_status(
         Vec::<u8>::new(),
-        warp::http::StatusCode::NOT_FOUND,
-    ))
+        StatusCode::NOT_FOUND,
+    )));
 }
 
 async fn index_put(
