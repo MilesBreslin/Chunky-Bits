@@ -51,12 +51,15 @@ pub struct Opt {
 pub enum Command {
     /// Provide a HTTP Gateway
     HttpGateway {
-        /// Cluster to gateway for
+        /// Cluster configuration to create the gateway for
         #[structopt(short, long)]
         cluster: PathBuf,
         /// Address to listen on
         #[structopt(short, long, default_value = "127.0.0.1:8000")]
         listen_addr: std::net::SocketAddr,
+        /// Read only setting to disable put requests
+        #[structopt(long)]
+        read_only: bool,
     },
     /// Put a file in the cluster
     Put {
@@ -229,6 +232,7 @@ async fn main() {
         Command::HttpGateway {
             cluster,
             listen_addr,
+            read_only,
         } => {
             use warp::Filter;
             let cluster: Arc<Cluster> =
@@ -244,7 +248,11 @@ async fn main() {
                 .and(warp::path::full())
                 .and(warp::body::stream())
                 .and_then(index_put);
-            warp::serve(route_get.or(route_put)).run(listen_addr).await;
+            if read_only {
+                warp::serve(route_get).run(listen_addr).await;
+            } else {
+                warp::serve(route_get.or(route_put)).run(listen_addr).await;
+            }
         },
         Command::Put {
             file,
