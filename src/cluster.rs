@@ -30,7 +30,10 @@ use tokio::{
     fs,
     io::AsyncRead,
     process::Command,
-    sync::Mutex,
+    sync::{
+        Mutex,
+        RwLock,
+    },
 };
 
 use crate::{
@@ -305,7 +308,6 @@ enum ClusterNodesDeserializer {
     Single(ClusterNode),
     Set(Vec<ClusterNodesDeserializer>),
     Map(HashMap<String, ClusterNodesDeserializer>),
-    Empty,
 }
 
 impl From<ClusterNodesDeserializer> for ClusterNodes {
@@ -335,7 +337,6 @@ impl From<ClusterNodesDeserializer> for ClusterNodes {
                 }
                 nodes_out
             },
-            Empty => Default::default(),
         })
     }
 }
@@ -346,6 +347,8 @@ struct ClusterNode {
     location: WeightedLocation,
     #[serde(default)]
     zones: BTreeSet<String>,
+    #[serde(default)]
+    repeat: usize,
 }
 
 impl Ord for ClusterNode {
@@ -386,15 +389,15 @@ impl CollectionDestination for ClusterNodesWithProfile {
         let writer = ClusterWriter {
             state: Arc::new(ClusterWriterState {
                 parent: self.clone(),
-                available_indexes: Mutex::new(
-                    <Self as AsRef<ClusterNodes>>::as_ref(self)
+                inner_state: Mutex::new(ClusterWriterInnerState {
+                    available_indexes: <Self as AsRef<ClusterNodes>>::as_ref(self)
                         .0
                         .iter()
                         .enumerate()
-                        .map(|(i, _)| i)
+                        .map(|(i, node)| (i, node.repeat + 1))
                         .collect(),
-                ),
-                failed_indexes: Mutex::new(HashSet::new()),
+                    failed_indexes: HashSet::new(),
+                }),
             }),
         };
         Ok((0..count).map(|_| writer.clone()).collect())
@@ -403,14 +406,21 @@ impl CollectionDestination for ClusterNodesWithProfile {
 
 struct ClusterWriterState {
     parent: ClusterNodesWithProfile,
-    available_indexes: Mutex<HashSet<usize>>,
-    failed_indexes: Mutex<HashSet<usize>>,
+    inner_state: Mutex<ClusterWriterInnerState>,
+}
+struct ClusterWriterInnerState {
+    available_indexes: HashMap<usize, usize>,
+    failed_indexes: HashSet<usize>,
 }
 
 impl ClusterWriterState {
     async fn next_writer(&self) -> Option<(usize, &ClusterNode)> {
         let (nodes, profile) = self.parent.0.as_ref();
-        let mut available_indexes = self.available_indexes.lock().await;
+        let mut state = self.inner_state.lock().await;
+        let ClusterWriterInnerState {
+            ref mut available_indexes,
+            ref failed_indexes,
+        } = *state;
         if available_indexes.len() == 0 {
             return None;
         }
@@ -418,22 +428,38 @@ impl ClusterWriterState {
             .0
             .iter()
             .enumerate()
-            .filter(|(i, _)| available_indexes.contains(&i))
+            .filter(|(i, _)| {
+                if let Some(availability) = available_indexes.get(&i) {
+                    if *availability >= 1 {
+                        return !failed_indexes.contains(&i);
+                    }
+                }
+                false
+            })
             .collect::<Vec<_>>();
         let total_weight: usize = available_locations
             .iter()
             .map(|(_, node)| node.location.weight)
             .sum();
+        if total_weight == 0 {
+            return None;
+        }
         let sample = rand::thread_rng().gen_range(1..(total_weight + 1));
         let mut current_weight: usize = 0;
         for (index, node) in available_locations.drain(..) {
             current_weight += node.location.weight;
             if current_weight > sample {
-                available_indexes.remove(&index);
+                let mut availability = available_indexes.get_mut(&index).unwrap();
+                *availability -= 1;
                 return Some((index, node));
             }
         }
         None
+    }
+
+    async fn invalidate_index(&self, index: usize) -> () {
+        let mut state = self.inner_state.lock().await;
+        state.failed_indexes.insert(index);
     }
 }
 
@@ -451,6 +477,8 @@ impl ShardWriter for ClusterWriter {
                     let writer = &node.location.location;
                     if let Ok(loc) = writer.write_subfile(hash, bytes).await {
                         return Ok(vec![loc]);
+                    } else {
+                        self.state.invalidate_index(index).await;
                     }
                 },
                 None => {
