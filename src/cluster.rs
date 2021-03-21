@@ -288,7 +288,6 @@ struct ZoneRule {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(from = "ClusterNodesDeserializer")]
-#[serde(into = "BTreeSet<ClusterNode>")]
 pub struct ClusterNodes(Vec<ClusterNode>);
 
 impl ClusterNodes {
