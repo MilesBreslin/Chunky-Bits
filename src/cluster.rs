@@ -180,8 +180,10 @@ impl MetadataPath {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 enum MetadataFormat {
+    Json,
+    JsonPretty,
     Yaml,
 }
 
@@ -196,7 +198,12 @@ impl MetadataFormat {
     where
         T: Serialize,
     {
-        Ok(serde_yaml::to_string(payload)?)
+        use MetadataFormat::*;
+        Ok(match self {
+            Json => serde_json::to_string(payload)?,
+            JsonPretty => serde_json::to_string_pretty(payload)?,
+            Yaml => serde_yaml::to_string(payload)?,
+        })
     }
 
     fn from_bytes<T, U>(&self, v: &T) -> Result<U, Error>
@@ -204,7 +211,10 @@ impl MetadataFormat {
         T: AsRef<[u8]>,
         U: DeserializeOwned,
     {
-        Ok(serde_yaml::from_slice(v.as_ref())?)
+        use MetadataFormat::*;
+        Ok(match self {
+            Json | JsonPretty | Yaml => serde_yaml::from_slice(v.as_ref())?,
+        })
     }
 }
 

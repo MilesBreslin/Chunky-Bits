@@ -18,6 +18,7 @@ rand = { version = "0.8", features = [ "serde" ] }
 reed-solomon-erasure = { version = "4.0" }
 reqwest = { version = "0.11", features = [ "default-tls", "gzip", "brotli" ] }
 serde = { version = "1.0", features = [ "derive" ] }
+serde_json = "1.0"
 serde_yaml = "0.8"
 sha2 = { version = "0.9" }
 structopt = "0.3"

@@ -131,6 +131,7 @@ pub enum Error {
     Unimplemented,
     NotHttp,
     UrlParseError(url::ParseError),
+    Json(serde_json::Error),
     Yaml(serde_yaml::Error),
 }
 
@@ -157,6 +158,11 @@ impl From<reqwest::Error> for Error {
 impl From<url::ParseError> for Error {
     fn from(e: url::ParseError) -> Self {
         Error::UrlParseError(e)
+    }
+}
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        Error::Json(e)
     }
 }
 impl From<serde_yaml::Error> for Error {
