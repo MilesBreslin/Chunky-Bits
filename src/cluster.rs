@@ -184,6 +184,7 @@ impl MetadataPath {
 enum MetadataFormat {
     Json,
     JsonPretty,
+    JsonStrict,
     Yaml,
 }
 
@@ -200,7 +201,7 @@ impl MetadataFormat {
     {
         use MetadataFormat::*;
         Ok(match self {
-            Json => serde_json::to_string(payload)?,
+            Json | JsonStrict => serde_json::to_string(payload)?,
             JsonPretty => serde_json::to_string_pretty(payload)?,
             Yaml => serde_yaml::to_string(payload)?,
         })
@@ -213,6 +214,7 @@ impl MetadataFormat {
     {
         use MetadataFormat::*;
         Ok(match self {
+            JsonStrict => serde_json::from_slice(v.as_ref())?,
             Json | JsonPretty | Yaml => serde_yaml::from_slice(v.as_ref())?,
         })
     }
