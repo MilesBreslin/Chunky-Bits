@@ -71,6 +71,9 @@ pub enum Command {
         /// Rename the file during the upload
         #[structopt(long)]
         filename: Option<PathBuf>,
+        /// Profile to use during the upload
+        #[structopt(long)]
+        profile: Option<String>,
     },
     /// Show information about a given cluster
     ClusterInfo {
@@ -258,11 +261,14 @@ async fn main() {
             file,
             cluster,
             filename,
+            profile,
         } => {
             let cluster: Cluster =
                 serde_yaml::from_reader(std::fs::File::open(&cluster).unwrap()).unwrap();
             let mut f = File::open(&file).await.unwrap();
-            let cluster_profile = cluster.get_profile(None).unwrap();
+            let cluster_profile = cluster
+                .get_profile(profile.as_ref().map(|s| s.as_str()))
+                .unwrap();
             let output_name = match filename {
                 Some(filename) => filename,
                 None => file,

@@ -30,10 +30,7 @@ use tokio::{
     fs,
     io::AsyncRead,
     process::Command,
-    sync::{
-        Mutex,
-        RwLock,
-    },
+    sync::Mutex,
 };
 
 use crate::{
@@ -280,9 +277,9 @@ impl Default for ZoneRules {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ZoneRule {
-    #[serde(default = "ChunkCount::none")]
-    minimum: ChunkCount,
-    ideal: ChunkCount,
+    minimum: Option<i8>,
+    #[serde(default)]
+    ideal: u8,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -397,6 +394,9 @@ impl CollectionDestination for ClusterNodesWithProfile {
                         .map(|(i, node)| (i, node.repeat + 1))
                         .collect(),
                     failed_indexes: HashSet::new(),
+                    zone_status: <Self as AsRef<ClusterProfile>>::as_ref(self)
+                        .zone_rules
+                        .clone(),
                 }),
             }),
         };
@@ -411,27 +411,61 @@ struct ClusterWriterState {
 struct ClusterWriterInnerState {
     available_indexes: HashMap<usize, usize>,
     failed_indexes: HashSet<usize>,
+    zone_status: ZoneRules,
 }
 
 impl ClusterWriterState {
     async fn next_writer(&self) -> Option<(usize, &ClusterNode)> {
-        let (nodes, profile) = self.parent.0.as_ref();
+        let (nodes, _profile) = self.parent.0.as_ref();
         let mut state = self.inner_state.lock().await;
         let ClusterWriterInnerState {
             ref mut available_indexes,
             ref failed_indexes,
+            zone_status: ZoneRules(ref mut zone_status),
         } = *state;
         if available_indexes.len() == 0 {
             return None;
         }
-        let mut available_locations = nodes
+        let required_zones = zone_status
+            .iter()
+            .filter_map(|(zone, ZoneRule { minimum, .. })| {
+                minimum
+                    .map(|minimum| if minimum > 0 { Some(zone) } else { None })
+                    .flatten()
+            })
+            .collect::<HashSet<&String>>();
+        let ideal_zones = zone_status
+            .iter()
+            .filter_map(|(zone, ZoneRule { ideal, .. })| {
+                if Into::<usize>::into(*ideal) > 0 {
+                    Some(zone)
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<&String>>();
+        let available_locations = nodes
             .0
             .iter()
             .enumerate()
-            .filter(|(i, _)| {
+            .filter(|(i, node)| {
+                if required_zones.len() > 0 {
+                    let is_required = required_zones.iter().any(|zone| node.zones.contains(*zone));
+                    if !is_required {
+                        return false;
+                    }
+                } else if ideal_zones.len() > 0 {
+                    let is_ideal = ideal_zones.iter().any(|zone| node.zones.contains(*zone));
+                    if !is_ideal {
+                        return false;
+                    }
+                }
+                if failed_indexes.contains(&i) {
+                    return false;
+                }
                 if let Some(availability) = available_indexes.get(&i) {
                     if *availability >= 1 {
-                        return !failed_indexes.contains(&i);
+                        return true;
                     }
                 }
                 false
@@ -446,20 +480,42 @@ impl ClusterWriterState {
         }
         let sample = rand::thread_rng().gen_range(1..(total_weight + 1));
         let mut current_weight: usize = 0;
-        for (index, node) in available_locations.drain(..) {
+        for (index, node) in available_locations.iter() {
             current_weight += node.location.weight;
             if current_weight > sample {
-                let mut availability = available_indexes.get_mut(&index).unwrap();
+                let availability = available_indexes.get_mut(&index).unwrap();
                 *availability -= 1;
-                return Some((index, node));
+                for zone in node.zones.iter() {
+                    if let Some(ref mut zone_rule) = zone_status.get_mut(zone) {
+                        if zone_rule.ideal > 0 {
+                            zone_rule.ideal -= 1;
+                        }
+                        if let Some(ref mut minimum) = zone_rule.minimum {
+                            *minimum -= 1;
+                        }
+                    }
+                }
+                return Some((*index, node));
             }
         }
         None
     }
 
     async fn invalidate_index(&self, index: usize) -> () {
+        let (nodes, _profile) = self.parent.0.as_ref();
         let mut state = self.inner_state.lock().await;
         state.failed_indexes.insert(index);
+        if let Some(node) = nodes.0.get(index) {
+            for zone in node.zones.iter() {
+                if let Some(ZoneRule {
+                    minimum: Some(ref mut minimum),
+                    ..
+                }) = state.zone_status.0.get_mut(zone)
+                {
+                    *minimum += 1;
+                }
+            }
+        }
     }
 }
 
@@ -528,7 +584,7 @@ impl<T> std::error::Error for SizeError<T> where T: SizedInt {}
 
 macro_rules! sized_uint {
     ($type:ident, $closest_int:ident, $max:expr, $min:expr) => {
-        #[derive(Clone,Debug,PartialEq,Eq,Hash,PartialOrd,Ord,Serialize,Deserialize)]
+        #[derive(Copy,Clone,Debug,PartialEq,Eq,Hash,PartialOrd,Ord,Serialize,Deserialize)]
         #[serde(try_from = "usize")]
         #[serde(into = "usize")]
         pub struct $type($closest_int);
