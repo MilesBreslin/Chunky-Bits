@@ -14,7 +14,7 @@ Given a file, Chunky Bits will split it into parts. A file part will consist of 
 
 A destination is anywhere a file can be referenced, currently including only local paths and HTTP URLs. One destination should be one physical disk running some filesystem of your choice.
 
-A metadata file is stored in the yaml format. A minimal example is shown below.
+A metadata file is stored in the JSON or YAML format. A minimal example is shown below.
 
 ```yaml
 length: 52428800
