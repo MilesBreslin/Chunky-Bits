@@ -279,10 +279,11 @@ impl Default for ZoneRules {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ZoneRule {
-    minimum: Option<i8>,
+    #[serde(default)]
+    minimum: i8,
     maximum: Option<i8>,
     #[serde(default)]
-    ideal: u8,
+    ideal: i8,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -431,29 +432,35 @@ impl ClusterWriterState {
         }
         let required_zones = zone_status
             .iter()
-            .filter_map(|(zone, ZoneRule { minimum, .. })| {
-                minimum
-                    .map(|minimum| if minimum > 0 { Some(zone) } else { None })
-                    .flatten()
-            })
+            .filter_map(
+                |(zone, ZoneRule { minimum, .. })| {
+                    if *minimum > 0 {
+                        Some(zone)
+                    } else {
+                        None
+                    }
+                },
+            )
             .collect::<HashSet<&String>>();
         let banned_zones = zone_status
             .iter()
             .filter_map(|(zone, ZoneRule { maximum, .. })| {
                 maximum
-                    .map(|maximum| if maximum == 0 { Some(zone) } else { None })
+                    .map(|maximum| if maximum <= 0 { Some(zone) } else { None })
                     .flatten()
             })
             .collect::<HashSet<&String>>();
         let ideal_zones = zone_status
             .iter()
-            .filter_map(|(zone, ZoneRule { ideal, .. })| {
-                if Into::<usize>::into(*ideal) > 0 {
-                    Some(zone)
-                } else {
-                    None
-                }
-            })
+            .filter_map(
+                |(zone, ZoneRule { ideal, .. })| {
+                    if *ideal > 0 {
+                        Some(zone)
+                    } else {
+                        None
+                    }
+                },
+            )
             .collect::<HashSet<&String>>();
         let available_locations = nodes
             .0
@@ -503,12 +510,8 @@ impl ClusterWriterState {
                 *availability -= 1;
                 for zone in node.zones.iter() {
                     if let Some(ref mut zone_rule) = zone_status.get_mut(zone) {
-                        if zone_rule.ideal > 0 {
-                            zone_rule.ideal -= 1;
-                        }
-                        if let Some(ref mut minimum) = zone_rule.minimum {
-                            *minimum -= 1;
-                        }
+                        zone_rule.ideal -= 1;
+                        zone_rule.minimum -= 1;
                         if let Some(ref mut maximum) = zone_rule.maximum {
                             *maximum -= 1;
                         }
@@ -527,8 +530,7 @@ impl ClusterWriterState {
         if let Some(node) = nodes.0.get(index) {
             for zone in node.zones.iter() {
                 if let Some(ZoneRule {
-                    minimum: Some(ref mut minimum),
-                    ..
+                    ref mut minimum, ..
                 }) = state.zone_status.0.get_mut(zone)
                 {
                     *minimum += 1;

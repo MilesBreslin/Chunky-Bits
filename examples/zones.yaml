@@ -22,9 +22,11 @@ profiles:
     # This is the default
     rules:
       ssd:
+        maximum: ~
         minimum: 0
         ideal: 0
       offsite:
+        maximum: ~
         minimum: 0
         ideal: 0
   lowlatency:
