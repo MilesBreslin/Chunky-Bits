@@ -278,6 +278,7 @@ impl Default for ZoneRules {
 #[derive(Clone, Serialize, Deserialize)]
 struct ZoneRule {
     minimum: Option<i8>,
+    maximum: Option<i8>,
     #[serde(default)]
     ideal: u8,
 }
@@ -434,6 +435,14 @@ impl ClusterWriterState {
                     .flatten()
             })
             .collect::<HashSet<&String>>();
+        let banned_zones = zone_status
+            .iter()
+            .filter_map(|(zone, ZoneRule { maximum, .. })| {
+                maximum
+                    .map(|maximum| if maximum == 0 { Some(zone) } else { None })
+                    .flatten()
+            })
+            .collect::<HashSet<&String>>();
         let ideal_zones = zone_status
             .iter()
             .filter_map(|(zone, ZoneRule { ideal, .. })| {
@@ -452,6 +461,11 @@ impl ClusterWriterState {
                 if required_zones.len() > 0 {
                     let is_required = required_zones.iter().any(|zone| node.zones.contains(*zone));
                     if !is_required {
+                        return false;
+                    }
+                } else if banned_zones.len() > 0 {
+                    let is_banned = banned_zones.iter().any(|zone| node.zones.contains(*zone));
+                    if !is_banned {
                         return false;
                     }
                 } else if ideal_zones.len() > 0 {
@@ -493,6 +507,9 @@ impl ClusterWriterState {
                         if let Some(ref mut minimum) = zone_rule.minimum {
                             *minimum -= 1;
                         }
+                        if let Some(ref mut maximum) = zone_rule.maximum {
+                            *maximum -= 1;
+                        }
                     }
                 }
                 return Some((*index, node));
@@ -513,6 +530,13 @@ impl ClusterWriterState {
                 }) = state.zone_status.0.get_mut(zone)
                 {
                     *minimum += 1;
+                }
+                if let Some(ZoneRule {
+                    maximum: Some(ref mut maximum),
+                    ..
+                }) = state.zone_status.0.get_mut(zone)
+                {
+                    *maximum += 1;
                 }
             }
         }
