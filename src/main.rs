@@ -1,9 +1,7 @@
 pub mod cluster;
 pub mod file;
-pub mod http;
-pub mod localfiles;
-
 use std::{
+    convert::Infallible,
     path::PathBuf,
     sync::Arc,
 };
@@ -130,6 +128,7 @@ pub enum Error {
     ExpiredWriter,
     NotEnoughWriters,
     UnknownError,
+    Unimplemented,
     NotHttp,
     UrlParseError(url::ParseError),
     Yaml(serde_yaml::Error),
@@ -165,12 +164,19 @@ impl From<serde_yaml::Error> for Error {
         Error::Yaml(e)
     }
 }
+impl From<Infallible> for Error {
+    fn from(_: Infallible) -> Self {
+        panic!("Infallible")
+    }
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
+
+impl std::error::Error for Error {}
 
 async fn index_get(
     cluster: Arc<Cluster>,
@@ -200,7 +206,7 @@ async fn index_put(
             &mut tokio_util::io::StreamReader::new(
                 body.map(|res| -> io::Result<_> { Ok(res.unwrap()) }),
             ),
-            &profile,
+            profile,
         )
         .await;
     if let Ok(_) = write {

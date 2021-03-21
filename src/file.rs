@@ -11,7 +11,6 @@ use futures::stream::{
     FuturesOrdered,
     StreamExt,
 };
-use rand::Rng;
 use reed_solomon_erasure::{
     galois_8,
     ReedSolomon,
@@ -25,7 +24,10 @@ use sha2::{
     Sha256,
 };
 use tokio::{
-    fs::{self,},
+    fs::{
+        self,
+        File,
+    },
     io::{
         AsyncRead,
         AsyncReadExt,
@@ -101,20 +103,22 @@ impl FileReference {
                         .collect();
                     let (mut bufs, mut hashes): (Vec<Vec<u8>>, Vec<Sha256Hash>) =
                         buf_futures.map(|res| res.unwrap()).unzip().await;
-                    let mut writers = destination.get_writers(&hashes).await?;
-                    let mut write_results = bufs
-                        .drain(..)
-                        .zip(writers.drain(..))
-                        .zip(hashes.drain(..))
-                        .map(|((data, (mut writer, location)), hash)| async move {
-                            writer.write_shard(&data).await.map(|_| HashWithLocation {
-                                sha256: hash,
-                                locations: location,
+                    let mut writers = destination.get_writers(hashes.len()).unwrap();
+                    let mut write_results =
+                        bufs.drain(..)
+                            .zip(writers.drain(..))
+                            .zip(hashes.drain(..))
+                            .map(|((data, mut writer), hash)| async move {
+                                writer.write_shard(&format!("{}", hash), &data).await.map(
+                                    |locations| HashWithLocation {
+                                        sha256: hash,
+                                        locations: locations,
+                                    },
+                                )
                             })
-                        })
-                        .collect::<FuturesOrdered<_>>()
-                        .collect::<Vec<Result<HashWithLocation<Sha256Hash>, Error>>>()
-                        .await;
+                            .collect::<FuturesOrdered<_>>()
+                            .collect::<Vec<Result<HashWithLocation<Sha256Hash>, Error>>>()
+                            .await;
                     if write_results.iter().any(Result::is_err) {
                         Err(write_results
                             .drain(..)
@@ -228,6 +232,39 @@ pub enum Location {
     Local(PathBuf),
 }
 
+impl Location {
+    pub(crate) async fn write_subfile(&self, name: &str, bytes: &[u8]) -> Result<Location, Error> {
+        use Location::*;
+        match self {
+            Http(url) => {
+                let mut target_url: Url = url.clone().into();
+                target_url.path_segments_mut().unwrap().push(name);
+                reqwest::Client::new()
+                    .put(target_url.clone())
+                    .body(bytes.to_owned())
+                    .send()
+                    .await?;
+                Ok(Http(HttpUrl(target_url)))
+            },
+            Local(path) => {
+                let mut target_path = path.clone();
+                target_path.push(name);
+                File::create(&target_path).await?.write_all(bytes).await?;
+                Ok(Local(target_path))
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl ShardWriter for Location {
+    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, Error> {
+        self.write_subfile(hash, bytes)
+            .await
+            .map(|location| vec![location])
+    }
+}
+
 impl FromStr for Location {
     type Err = Error;
 
@@ -290,72 +327,37 @@ impl fmt::Display for Sha256Hash {
     }
 }
 
-#[async_trait]
 pub trait CollectionDestination {
-    async fn get_writers<T: fmt::Display + Send + Sync + 'static>(
-        &self,
-        addrs: &[T],
-    ) -> Result<
-        Vec<(
-            Box<dyn ShardWriter + Unpin + Send + Sync + 'static>,
-            Vec<Location>,
-        )>,
-        Error,
-    >;
+    type Writer: ShardWriter + Send + Sync;
+    type Error: Into<Error> + std::error::Error + 'static;
+    fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, Self::Error>;
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum LocationDestination {
-    Http(crate::http::HttpFiles),
-    Local(crate::localfiles::LocalFiles),
-}
+impl CollectionDestination for Vec<WeightedLocation> {
+    type Error = Error;
+    type Writer = Location;
 
-impl FromStr for LocationDestination {
-    type Err = <Location as FromStr>::Err;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Location::from_str(s)?.into())
-    }
-}
-impl From<Location> for LocationDestination {
-    fn from(loc: Location) -> Self {
-        use crate::{
-            http::HttpFiles,
-            localfiles::LocalFiles,
-        };
-        match loc {
-            Location::Local(path) => LocationDestination::Local(LocalFiles::new(&path)),
-            Location::Http(url) => LocationDestination::Http(HttpFiles::new(url)),
+    fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, Self::Error> {
+        use rand::seq::SliceRandom;
+        if self.len() < count {
+            return Err(Error::NotEnoughWriters);
         }
+        let mut rng = rand::thread_rng();
+        Ok(self
+            .choose_multiple_weighted(&mut rng, count, |WeightedLocation { weight, .. }| {
+                *weight as f64
+            })
+            .unwrap()
+            .map(|WeightedLocation { location, .. }| location.clone())
+            .collect())
     }
 }
 
-#[async_trait]
-impl CollectionDestination for LocationDestination {
-    async fn get_writers<T: fmt::Display + Send + Sync + 'static>(
-        &self,
-        addrs: &[T],
-    ) -> Result<
-        Vec<(
-            Box<dyn ShardWriter + Unpin + Send + Sync + 'static>,
-            Vec<Location>,
-        )>,
-        Error,
-    > {
-        use LocationDestination::*;
-        match self {
-            Local(loc) => loc.get_writers(addrs).await,
-            Http(loc) => loc.get_writers(addrs).await,
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WeightedLocation {
     #[serde(default = "WeightedLocation::default_weight")]
     pub weight: usize,
-    pub location: LocationDestination,
+    pub location: Location,
 }
 impl WeightedLocation {
     fn default_weight() -> usize {
@@ -363,7 +365,7 @@ impl WeightedLocation {
     }
 }
 impl FromStr for WeightedLocation {
-    type Err = <LocationDestination as FromStr>::Err;
+    type Err = <Location as FromStr>::Err;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut split_string = s.split(":");
@@ -371,82 +373,20 @@ impl FromStr for WeightedLocation {
             if let Ok(weight) = prefix.parse::<usize>() {
                 return Ok(WeightedLocation {
                     weight: weight,
-                    location: LocationDestination::from_str(postfix)?,
+                    location: Location::from_str(postfix)?,
                 });
             }
         }
         Ok(WeightedLocation {
             weight: Self::default_weight(),
-            location: LocationDestination::from_str(s)?,
+            location: Location::from_str(s)?,
         })
     }
 }
 
 #[async_trait]
-impl CollectionDestination for Vec<WeightedLocation> {
-    async fn get_writers<T: fmt::Display + Send + Sync + 'static>(
-        &self,
-        addrs: &[T],
-    ) -> Result<
-        Vec<(
-            Box<dyn ShardWriter + Unpin + Send + Sync + 'static>,
-            Vec<Location>,
-        )>,
-        Error,
-    > {
-        let mut working_locations: Vec<&WeightedLocation> = self.iter().collect();
-        let mut res = vec![];
-        for addr in addrs {
-            let mut total_weight: usize = working_locations
-                .iter()
-                .map(|WeightedLocation { weight, .. }| *weight)
-                .sum();
-            if total_weight == 0 {
-                working_locations = self.iter().collect();
-                total_weight = working_locations
-                    .iter()
-                    .map(|WeightedLocation { weight, .. }| *weight)
-                    .sum();
-            }
-            let sample = rand::thread_rng().gen_range(1..(total_weight + 1));
-            let mut counted_weight = 0;
-            let mut found_index = None;
-            for (index, WeightedLocation { weight, .. }) in working_locations.iter().enumerate() {
-                counted_weight += weight;
-                if sample <= counted_weight {
-                    found_index = Some(index);
-                    break;
-                }
-            }
-            if let Some(index) = found_index {
-                res.push(
-                    working_locations
-                        .remove(index)
-                        .location
-                        .get_writers(&[format!("{}", addr)])
-                        .await?
-                        .drain(..)
-                        .next()
-                        .unwrap(),
-                )
-            } else {
-                return Err(Error::NotEnoughWriters);
-            }
-        }
-        Ok(res)
-    }
-}
-
-#[async_trait]
 pub trait ShardWriter {
-    async fn write_shard(&mut self, bytes: &[u8]) -> Result<(), Error>;
-}
-
-#[async_trait]
-impl ShardWriter for fs::File {
-    async fn write_shard(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        Ok(self.write_all(&bytes).await?)
-    }
+    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, Error>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

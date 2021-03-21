@@ -1,12 +1,26 @@
 use std::{
-    collections::BTreeMap,
-    convert::TryFrom,
+    cmp::Ordering,
+    collections::{
+        BTreeMap,
+        BTreeSet,
+        HashMap,
+        HashSet,
+    },
+    convert::{
+        Infallible,
+        TryFrom,
+    },
     fmt,
     marker::PhantomData,
     path::PathBuf,
     sync::Arc,
 };
 
+use async_trait::async_trait;
+use rand::{
+    self,
+    Rng,
+};
 use serde::{
     de::DeserializeOwned,
     Deserialize,
@@ -16,6 +30,7 @@ use tokio::{
     fs,
     io::AsyncRead,
     process::Command,
+    sync::Mutex,
 };
 
 use crate::{
@@ -23,6 +38,8 @@ use crate::{
         self,
         CollectionDestination,
         FileReference,
+        Location,
+        ShardWriter,
         WeightedLocation,
     },
     Error,
@@ -73,12 +90,8 @@ impl Cluster {
         Ok(reader)
     }
 
-    pub async fn get_destination(&self, _profile: &ClusterProfile) -> impl CollectionDestination {
-        Into::<Vec<Vec<WeightedLocation>>>::into(self.destinations.clone())
-            .iter_mut()
-            .map(|d| d.drain(..))
-            .flatten()
-            .collect::<Vec<WeightedLocation>>()
+    pub async fn get_destination(&self, profile: &ClusterProfile) -> impl CollectionDestination {
+        self.destinations.clone().with_profile(profile.clone())
     }
 
     pub fn get_profile<'a, T>(&self, profile: T) -> Option<&'_ ClusterProfile>
@@ -212,12 +225,17 @@ impl ClusterProfiles {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ClusterProfile {
-    #[serde(default = "ChunkSize::default")]
+    #[serde(default)]
     chunk_size: ChunkSize,
     #[serde(alias = "data")]
     data_chunks: DataChunkCount,
     #[serde(alias = "parity")]
     parity_chunks: ParityChunkCount,
+    #[serde(default)]
+    #[serde(alias = "zone")]
+    #[serde(alias = "zones")]
+    #[serde(alias = "rules")]
+    zone_rules: ZoneRules,
 }
 
 impl ClusterProfile {
@@ -235,21 +253,195 @@ impl ClusterProfile {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-#[serde(into = "Vec<Vec<WeightedLocation>>")]
-enum ClusterNodes {
-    Single(WeightedLocation),
-    List(Vec<WeightedLocation>),
-    MDList(Vec<Vec<WeightedLocation>>),
+struct ZoneRules(BTreeMap<String, ZoneRule>);
+impl Default for ZoneRules {
+    fn default() -> Self {
+        ZoneRules(BTreeMap::new())
+    }
 }
 
-impl Into<Vec<Vec<WeightedLocation>>> for ClusterNodes {
-    fn into(self) -> Vec<Vec<WeightedLocation>> {
-        use ClusterNodes::*;
-        match self {
-            Single(node) => vec![vec![node]],
-            List(nodes) => vec![nodes],
-            MDList(md_nodes) => md_nodes,
+#[derive(Clone, Serialize, Deserialize)]
+struct ZoneRule {
+    #[serde(default = "ChunkCount::none")]
+    minimum: ChunkCount,
+    ideal: ChunkCount,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(from = "ClusterNodesDeserializer")]
+#[serde(into = "BTreeSet<ClusterNode>")]
+pub struct ClusterNodes(Vec<ClusterNode>);
+
+impl ClusterNodes {
+    fn with_profile(self, profile: ClusterProfile) -> ClusterNodesWithProfile {
+        ClusterNodesWithProfile(Arc::new((self, profile)))
+    }
+}
+
+impl Into<BTreeSet<ClusterNode>> for ClusterNodes {
+    fn into(mut self) -> BTreeSet<ClusterNode> {
+        self.0.drain(..).collect()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ClusterNodesDeserializer {
+    Single(ClusterNode),
+    Set(Vec<ClusterNodesDeserializer>),
+    Map(HashMap<String, ClusterNodesDeserializer>),
+    Empty,
+}
+
+impl From<ClusterNodesDeserializer> for ClusterNodes {
+    fn from(des: ClusterNodesDeserializer) -> ClusterNodes {
+        use ClusterNodesDeserializer::*;
+        ClusterNodes(match des {
+            Single(node) => {
+                vec![node]
+            },
+            Set(mut nodes) => {
+                let mut nodes_out = Vec::<ClusterNode>::new();
+                for sub_nodes in nodes.drain(..) {
+                    let mut nodes: ClusterNodes = sub_nodes.into();
+                    nodes_out.append(&mut nodes.0);
+                }
+                nodes_out
+            },
+            Map(mut nodes) => {
+                let mut nodes_out = Vec::<ClusterNode>::new();
+                for (name, sub_nodes) in nodes.drain() {
+                    let nodes: ClusterNodes = sub_nodes.into();
+                    for sub_node in nodes.0 {
+                        let mut sub_node = sub_node.clone();
+                        sub_node.zones.insert(name.clone());
+                        nodes_out.push(sub_node);
+                    }
+                }
+                nodes_out
+            },
+            Empty => Default::default(),
+        })
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ClusterNode {
+    #[serde(flatten)]
+    location: WeightedLocation,
+    #[serde(default)]
+    zones: BTreeSet<String>,
+}
+
+impl Ord for ClusterNode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.zones == other.zones {
+            self.location.cmp(&other.location)
+        } else {
+            self.zones.cmp(&other.zones)
+        }
+    }
+}
+
+impl PartialOrd for ClusterNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Clone)]
+struct ClusterNodesWithProfile(Arc<(ClusterNodes, ClusterProfile)>);
+
+impl AsRef<ClusterNodes> for ClusterNodesWithProfile {
+    fn as_ref(&self) -> &ClusterNodes {
+        &self.0.as_ref().0
+    }
+}
+impl AsRef<ClusterProfile> for ClusterNodesWithProfile {
+    fn as_ref(&self) -> &ClusterProfile {
+        &self.0.as_ref().1
+    }
+}
+
+impl CollectionDestination for ClusterNodesWithProfile {
+    type Error = Infallible;
+    type Writer = ClusterWriter;
+
+    fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, Self::Error> {
+        let writer = ClusterWriter {
+            state: Arc::new(ClusterWriterState {
+                parent: self.clone(),
+                available_indexes: Mutex::new(
+                    <Self as AsRef<ClusterNodes>>::as_ref(self)
+                        .0
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| i)
+                        .collect(),
+                ),
+                failed_indexes: Mutex::new(HashSet::new()),
+            }),
+        };
+        Ok((0..count).map(|_| writer.clone()).collect())
+    }
+}
+
+struct ClusterWriterState {
+    parent: ClusterNodesWithProfile,
+    available_indexes: Mutex<HashSet<usize>>,
+    failed_indexes: Mutex<HashSet<usize>>,
+}
+
+impl ClusterWriterState {
+    async fn next_writer(&self) -> Option<(usize, &ClusterNode)> {
+        let (nodes, profile) = self.parent.0.as_ref();
+        let mut available_indexes = self.available_indexes.lock().await;
+        if available_indexes.len() == 0 {
+            return None;
+        }
+        let mut available_locations = nodes
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| available_indexes.contains(&i))
+            .collect::<Vec<_>>();
+        let total_weight: usize = available_locations
+            .iter()
+            .map(|(_, node)| node.location.weight)
+            .sum();
+        let sample = rand::thread_rng().gen_range(1..(total_weight + 1));
+        let mut current_weight: usize = 0;
+        for (index, node) in available_locations.drain(..) {
+            current_weight += node.location.weight;
+            if current_weight > sample {
+                available_indexes.remove(&index);
+                return Some((index, node));
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone)]
+struct ClusterWriter {
+    state: Arc<ClusterWriterState>,
+}
+
+#[async_trait]
+impl ShardWriter for ClusterWriter {
+    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, Error> {
+        loop {
+            match self.state.as_ref().next_writer().await {
+                Some((index, node)) => {
+                    let writer = &node.location.location;
+                    if let Ok(loc) = writer.write_subfile(hash, bytes).await {
+                        return Ok(vec![loc]);
+                    }
+                },
+                None => {
+                    return Err(Error::NotEnoughWriters);
+                },
+            }
         }
     }
 }
@@ -277,7 +469,7 @@ where
             "{} must be greater than {} and less than {}",
             T::NAME,
             T::MIN,
-            T::MAX
+            T::MAX,
         )
     }
 }
@@ -384,3 +576,9 @@ impl Default for ChunkSize {
 }
 sized_uint!(DataChunkCount, u8, 256, 1);
 sized_uint!(ParityChunkCount, u8, 256, 1);
+sized_uint!(ChunkCount, u8, 256, 0);
+impl ChunkCount {
+    pub fn none() -> ChunkCount {
+        ChunkCount(0)
+    }
+}
