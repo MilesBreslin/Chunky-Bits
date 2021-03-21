@@ -189,7 +189,7 @@ enum MetadataFormat {
 
 impl Default for MetadataFormat {
     fn default() -> Self {
-        MetadataFormat::Yaml
+        MetadataFormat::JsonPretty
     }
 }
 
