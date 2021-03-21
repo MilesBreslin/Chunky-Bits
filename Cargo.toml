@@ -3,6 +3,8 @@ name = "chunky-bits"
 version = "0.1.0"
 authors = ["Miles Breslin <milesbreslin@gmail.com>"]
 edition = "2018"
+license = "MIT"
+description = "Chunky Bits is simple, unmanaged, distributed HTTP object store tool."
 
 [profile.release]
 lto = true
