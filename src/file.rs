@@ -11,6 +11,10 @@ use futures::stream::{
     FuturesOrdered,
     StreamExt,
 };
+use rand::{
+    self,
+    Rng,
+};
 use reed_solomon_erasure::{
     galois_8,
     ReedSolomon,
@@ -34,6 +38,7 @@ use tokio::{
         AsyncWrite,
         AsyncWriteExt,
     },
+    sync::Mutex,
     task::JoinHandle,
 };
 use url::Url;
@@ -164,57 +169,28 @@ impl FileReference {
         W: AsyncWrite + Unpin,
     {
         let mut bytes_written: u64 = 0;
-        for FilePart { data, parity, .. } in &self.parts {
+        for file_part in &self.parts {
             if self.length.map(|len| bytes_written >= len).unwrap_or(false) {
                 break;
             }
-            let r: ReedSolomon<galois_8::Field> =
-                ReedSolomon::new(data.len(), parity.len()).unwrap();
-            let mut shard_bufs = data
-                .iter()
-                .chain(parity.iter())
-                .map(|filepart| async move {
-                    for location in &filepart.locations {
-                        let read = match location {
-                            Location::Local(path) => fs::read(&path).await.ok(),
-                            Location::Http(url) => {
-                                match reqwest::get(Into::<Url>::into(url.clone())).await {
-                                    Ok(resp) => {
-                                        resp.bytes().await.ok().map(|b| b.into_iter().collect())
-                                    },
-                                    Err(_) => None,
-                                }
-                            },
-                        };
-                        if let Some(buf) = read {
-                            return Some(buf);
-                        }
-                    }
-                    None
-                })
-                .collect::<FuturesOrdered<_>>()
-                .collect::<Vec<Option<Vec<u8>>>>()
-                .await;
-            r.reconstruct(&mut shard_bufs)?;
-            for buf in shard_bufs.drain(..).take(data.len()).filter_map(|op| op) {
-                if let Some(file_length) = self.length {
-                    let bytes_remaining: u64 = file_length - bytes_written;
-                    let mut w_buf: &[u8] = &buf;
-                    if bytes_remaining < w_buf.len() as u64 {
-                        w_buf = &buf[..bytes_remaining as usize];
-                    }
-                    bytes_written += w_buf.len() as u64;
-                    writer.write_all(&w_buf).await?;
-                } else {
-                    writer.write_all(&buf).await?;
+            let buf = file_part.read().await?;
+            if let Some(file_length) = self.length {
+                let bytes_remaining: u64 = file_length - bytes_written;
+                let mut w_buf: &[u8] = &buf;
+                if bytes_remaining < w_buf.len() as u64 {
+                    w_buf = &buf[..bytes_remaining as usize];
                 }
+                bytes_written += w_buf.len() as u64;
+                writer.write_all(&w_buf).await?;
+            } else {
+                writer.write_all(&buf).await?;
             }
         }
         Ok(())
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FilePart {
     #[serde(skip_serializing_if = "Option::is_none")]
     encryption: Option<Encryption>,
@@ -225,6 +201,58 @@ pub struct FilePart {
     parity: Vec<HashWithLocation<Sha256Hash>>,
 }
 
+impl FilePart {
+    pub(crate) async fn read(&self) -> Result<Vec<u8>, Error> {
+        let r: ReedSolomon<galois_8::Field> = ReedSolomon::new(self.data.len(), self.parity.len())?;
+        let all_chunks_owned = self
+            .data
+            .iter()
+            .chain(self.parity.iter())
+            .cloned()
+            .enumerate()
+            .collect::<Vec<_>>();
+        let all_chunks = Arc::new(Mutex::new(all_chunks_owned));
+        let mut indexed_chunks = self.data
+            .iter()
+            .map(|_| {
+                let all_chunks = all_chunks.clone();
+                async move {
+                    loop {
+                        let mut all_chunks = all_chunks.as_ref().lock().await;
+                        if all_chunks.is_empty() {
+                            return None;
+                        }
+                        let sample = rand::thread_rng().gen_range(0..all_chunks.len());
+                        let (index, mut chunks) = all_chunks.remove(sample);
+                        drop(all_chunks);
+                        for location in chunks.locations.drain(..) {
+                            if let Some(data) = location.read().await {
+                                return Some((index, data));
+                            }
+                        }
+                    }
+                }
+            })
+            .collect::<FuturesOrdered<_>>()
+            .collect::<Vec<Option<(usize, Vec<u8>)>>>()
+            .await;
+        let mut all_read_chunks: Vec<Option<Vec<u8>>> = self.data.iter().chain(self.parity.iter()).map(|_| None).collect();
+        for indexed_chunk in indexed_chunks.drain(..) {
+            if let Some((index,chunk)) = indexed_chunk {
+                *all_read_chunks.get_mut(index).unwrap() = Some(chunk);
+            }
+        }
+        if !all_read_chunks.iter().take(self.data.len()).all(Option::is_some) {
+            r.reconstruct(&mut all_read_chunks)?;
+        }
+        let mut output = Vec::<u8>::new();
+        for buf in all_read_chunks.drain(..).take(self.data.len()) {
+            output.append(&mut buf.unwrap())
+        }
+        Ok(output)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Location {
@@ -233,6 +261,16 @@ pub enum Location {
 }
 
 impl Location {
+    pub(crate) async fn read(&self) -> Option<Vec<u8>> {
+        match self {
+            Location::Local(path) => fs::read(&path).await.ok(),
+            Location::Http(url) => match reqwest::get(Into::<Url>::into(url.clone())).await {
+                Ok(resp) => resp.bytes().await.ok().map(|b| b.into_iter().collect()),
+                Err(_) => None,
+            },
+        }
+    }
+
     pub(crate) async fn write_subfile(&self, name: &str, bytes: &[u8]) -> Result<Location, Error> {
         use Location::*;
         match self {
