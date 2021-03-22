@@ -703,7 +703,7 @@ impl Default for ChunkSize {
     }
 }
 sized_uint!(DataChunkCount, u8, 256, 1);
-sized_uint!(ParityChunkCount, u8, 256, 1);
+sized_uint!(ParityChunkCount, u8, 256, 0);
 sized_uint!(ChunkCount, u8, 256, 0);
 impl ChunkCount {
     pub fn none() -> ChunkCount {

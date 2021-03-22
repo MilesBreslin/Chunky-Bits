@@ -53,3 +53,28 @@ jobs:
           REP="$(sha256sum tmpdir/TESTFILE.repair | sed 's/ .*//')"
           echo "$ORIG ?= $REP"
           [ "$ORIG" == "$REP" ]
+  validate-example-clusters:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Validate Examples
+        run: |
+          FAILED=0
+          for file in examples/*.yaml ; do
+            echo "$file"
+            if ! cargo run -- cluster-info "$file" ; then
+              FAILED="$((FAILED+1))"
+            fi
+          done
+          ((FAILED==0))
