@@ -1,0 +1,11 @@
+destinations:
+  - location: ./tmpdir/repo
+    repeat: 99
+metadata:
+  type: path
+  format: yaml
+  path: ./tmpdir/metadata
+profiles:
+  default:
+    data: 3
+    parity: 2

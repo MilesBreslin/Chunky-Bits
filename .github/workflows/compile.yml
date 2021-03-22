@@ -21,3 +21,35 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: cargo build
+  encode-decode:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Setup Cluster
+        run: |
+          ln -sfT "$(mktemp -d)" tmpdir
+          mkdir -p tmpdir/{metadata/tmpdir,repo}
+          dd if=/dev/urandom of=tmpdir/TESTFILE bs=256K count=201
+      - name: Encode File
+        run: cargo run -- put --cluster examples/test.yaml tmpdir/TESTFILE
+      - name: Decode File
+        run: |
+          cargo run -- decode-file --file tmpdir/metadata/tmpdir/TESTFILE \
+            --destination tmpdir/TESTFILE.repair
+      - name: Verify Integrity
+        run: |
+          ORIG="$(sha256sum tmpdir/TESTFILE | sed 's/ .*//')"
+          REP="$(sha256sum tmpdir/TESTFILE.repair | sed 's/ .*//')"
+          echo "$ORIG ?= $REP"
+          [ "$ORIG" == "$REP" ]
