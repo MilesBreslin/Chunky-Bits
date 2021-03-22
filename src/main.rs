@@ -138,6 +138,11 @@ pub enum Command {
         /// File reference metadata file
         file: PathBuf,
     },
+    /// Given a file reference, show all chunk hashes
+    GetHashes {
+        /// File reference metadata file
+        file: PathBuf,
+    },
 }
 
 #[derive(Debug)]
@@ -423,6 +428,15 @@ async fn main() {
                 "{}",
                 serde_yaml::to_string(&file_reference.verify().await).unwrap(),
             );
+        },
+        Command::GetHashes { file } => {
+            let file_reference: FileReference =
+                serde_yaml::from_reader(&std::fs::File::open(file).unwrap()).unwrap();
+            for part in &file_reference.parts {
+                for location_with_hash in part.data.iter().chain(part.parity.iter()) {
+                    println!("{}", location_with_hash.sha256);
+                }
+            }
         },
     }
 }

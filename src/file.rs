@@ -206,12 +206,12 @@ impl FileReference {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FilePart {
     #[serde(skip_serializing_if = "Option::is_none")]
-    encryption: Option<Encryption>,
+    pub encryption: Option<Encryption>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    chunksize: Option<usize>,
-    data: Vec<HashWithLocation<Sha256Hash>>,
+    pub chunksize: Option<usize>,
+    pub data: Vec<HashWithLocation<Sha256Hash>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    parity: Vec<HashWithLocation<Sha256Hash>>,
+    pub parity: Vec<HashWithLocation<Sha256Hash>>,
 }
 
 impl FilePart {
