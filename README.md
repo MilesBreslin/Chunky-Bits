@@ -1,4 +1,5 @@
 # Chunky Bits
+[![Compile](https://github.com/MilesBreslin/Chunky-Bits/actions/workflows/compile.yml/badge.svg)](https://github.com/MilesBreslin/Chunky-Bits/actions/workflows/compile.yml)
 
 Chunky Bits is simple, unmanaged, distributed HTTP object store tool. It is _not_ S3 compatible. Chunky Bits is built to handle the common user's cluster, where the cluster may grow/shrink at anytime and will consist of cheap, unbalanced hardware.
 
