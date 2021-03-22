@@ -8,6 +8,19 @@ This is not intended to be a self-contained storage solution. Chunky Bits is a t
 
 This software is currently in an alpha state. This is an education experiment, not a production tool. I take no responsibility for how you use this tool and any data-loss that may incur from it. You have been warned. See [LICENSE](./LICENSE) file for more details.
 
+### Getting Started
+
+Chunky Bits can be compiled with `cargo` which provides a single executable capable of providing a usable command-line application and a HTTP gateway. To get familiar with the tool, try out the following commands. You will need a `cluster.yaml` and you can find and modify one from the examples directory, such as the [local](./example/local.yaml) cluster file.
+
+```bash
+chunky-bits put TESTFILE --cluster cluster.yaml
+chunky-bits decode-file --file path/to/metadata/TESTFILE --destination TESTFILE.2
+```
+
+The `put` command will write your file into the cluster and create a metadata reference to it. If you are using the `path` metadata type, you will be able to view it as a file.
+
+The `decode-file` command will read the file from the cluster. However, since the metadata files contain all the metadata required to reference them, you do not need to specify a cluster to decode a metadata file.
+
 ### Design
 
 Given a file, Chunky Bits will split it into parts. A file part will consist of `d` data chunks and `p` parity chunks. A single part will be distributed at least `d+p` destinations. A metadata file will be returned containing at least the checksums of each chunk, the locations of each chunk, and the length of the file.
@@ -62,4 +75,4 @@ Going one-step further on the the combination example, you could purchase (or re
 
 All of the above solutions are under the assumption that all of your data will reside at a location that you manage servers at. A consequence of that is that you must buy up-front each individual drive, including the extra drives for parity. However, since a destination is just a WebDav end-point, that includes the ability to run S3-compatible object stores as endpoints. You could add a cloud-storage provider as `m` remote destinations in addition to your `n` on-site destinations. This would allow you to be able to fail `m` locally managed disks before data-loss. You would also be paying as you go for the remote storage and could weight your reads to only be from the local part of your cluster while it is operating normally, reducing cloud data egress costs.
 
-Finally, all of the above solutions expect you to plan out your cluster ahead of time, which still is recommended. However, Chunky Bits will allow you to rebalance a file on a per-file basis, expand/shrink the cluster manually, use mismatched drives, and mix remote and local storage. Enterprise-grade tools typically expect you to have planned out your storage expansion in whole units, but given Chunky Bits's more free-form data distribution methods, that is not necessary.
+Finally, all of the above solutions expect you to plan out your cluster ahead of time, which still is recommended. However, Chunky Bits will allow you to rebalance a file on a per-file basis, expand/shrink the cluster manually, use mismatched drives, and mix remote and local storage. Enterprise-grade tools typically expect you to have planned out your storage expansion in whole units, but given Chunky Bits' more free-form data distribution methods, that is not necessary.
