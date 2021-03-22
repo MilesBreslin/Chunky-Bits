@@ -204,12 +204,26 @@ async fn index_get(
     cluster: Arc<Cluster>,
     path: warp::path::FullPath,
 ) -> Result<Box<dyn warp::Reply>, std::convert::Infallible> {
-    if let Ok(s) = cluster.read_file(path.as_str()).await {
-        let stream = FramedRead::new(s, BytesCodec::new());
-        return Ok(Box::new(warp::reply::with_status(
-            Response::new(Body::wrap_stream(stream)),
-            StatusCode::OK,
-        )));
+    if let Ok(file_ref) = cluster.get_file_ref(path.as_str()).await {
+        let length = file_ref.length.clone();
+        let (reader, mut writer) = tokio::io::duplex(1 << 24);
+        tokio::spawn(async move { file_ref.to_writer(&mut writer).await });
+        let stream = FramedRead::new(reader, BytesCodec::new());
+        if let Some(length) = length {
+            return Ok(Box::new(warp::reply::with_status(
+                warp::reply::with_header(
+                    Response::new(Body::wrap_stream(stream)),
+                    "Content-Length",
+                    length,
+                ),
+                StatusCode::OK,
+            )));
+        } else {
+            return Ok(Box::new(warp::reply::with_status(
+                Response::new(Body::wrap_stream(stream)),
+                StatusCode::OK,
+            )));
+        }
     }
     return Ok(Box::new(warp::reply::with_status(
         Vec::<u8>::new(),

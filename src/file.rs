@@ -48,9 +48,9 @@ use crate::Error;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileReference {
     #[serde(skip_serializing_if = "Option::is_none")]
-    compression: Option<Compression>,
-    length: Option<u64>,
-    parts: Vec<FilePart>,
+    pub compression: Option<Compression>,
+    pub length: Option<u64>,
+    pub parts: Vec<FilePart>,
 }
 
 impl FileReference {
