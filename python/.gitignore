@@ -1,4 +1,3 @@
-/target
+tmpdir
 /*.yaml
 /*.yml
-tmpdir
