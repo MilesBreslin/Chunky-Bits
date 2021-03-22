@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt,
     hash::Hash,
     path::PathBuf,
@@ -191,6 +192,15 @@ impl FileReference {
         }
         Ok(())
     }
+
+    pub async fn verify(&self) -> Vec<HashMap<&'_ Location, Integrity>> {
+        self.parts
+            .iter()
+            .map(FilePart::verify)
+            .collect::<FuturesOrdered<_>>()
+            .collect()
+            .await
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -267,6 +277,35 @@ impl FilePart {
         }
         Ok(output)
     }
+
+    pub(crate) async fn verify(&self) -> HashMap<&'_ Location, Integrity> {
+        let mut out = HashMap::new();
+        for hash_with_location in self.data.iter().chain(self.parity.iter()) {
+            let ref hash = hash_with_location.sha256;
+            for location in hash_with_location.locations.iter() {
+                let integrity: Integrity = {
+                    if let Some(data) = location.read().await {
+                        if hash.verify(data).await.1 {
+                            Integrity::Valid
+                        } else {
+                            Integrity::Invalid
+                        }
+                    } else {
+                        Integrity::Unavailable
+                    }
+                };
+                out.insert(location, integrity);
+            }
+        }
+        out
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Integrity {
+    Valid,
+    Invalid,
+    Unavailable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -340,6 +379,11 @@ pub struct HashWithLocation<T: Serialize + Clone + PartialEq + Eq + Hash + Parti
 pub struct Sha256Hash(#[serde(with = "hex")] [u8; 32]);
 
 impl Sha256Hash {
+    pub async fn verify(&self, buf: Vec<u8>) -> (Vec<u8>, bool) {
+        let (buf, other) = Self::from_vec_async(buf).await;
+        (buf, self.eq(&other))
+    }
+
     pub async fn from_vec_async(buf: Vec<u8>) -> (Vec<u8>, Self) {
         tokio::task::spawn_blocking(move || {
             let hash = Sha256Hash::from_buf(&buf);

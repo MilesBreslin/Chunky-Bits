@@ -133,6 +133,11 @@ pub enum Command {
         #[structopt(long)]
         destination: PathBuf,
     },
+    /// Given a file reference, identify the integrity of it
+    VerifyFile {
+        /// File reference metadata file
+        file: PathBuf,
+    },
 }
 
 #[derive(Debug)]
@@ -410,6 +415,14 @@ async fn main() {
                 serde_yaml::from_reader(&std::fs::File::open(file_reference).unwrap()).unwrap();
             let mut f_dest = File::create(destination).await.unwrap();
             file_reference.to_writer(&mut f_dest).await.unwrap();
+        },
+        Command::VerifyFile { file } => {
+            let file_reference: FileReference =
+                serde_yaml::from_reader(&std::fs::File::open(file).unwrap()).unwrap();
+            println!(
+                "{}",
+                serde_yaml::to_string(&file_reference.verify().await).unwrap(),
+            );
         },
     }
 }
