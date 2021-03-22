@@ -338,7 +338,7 @@ pub struct Sha256Hash(#[serde(with = "hex")] [u8; 32]);
 
 impl Sha256Hash {
     pub async fn from_vec_async(buf: Vec<u8>) -> (Vec<u8>, Self) {
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
             let hash = Sha256Hash::from_buf(&buf);
             (buf, hash)
         })
