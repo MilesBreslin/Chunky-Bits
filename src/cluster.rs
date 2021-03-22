@@ -85,7 +85,7 @@ impl Cluster {
 
     pub async fn read_file(&self, filename: &str) -> Result<impl AsyncRead + Unpin, Error> {
         let file_ref = self.get_file_ref(filename).await?;
-        let (reader, mut writer) = tokio::io::duplex(1 << 20);
+        let (reader, mut writer) = tokio::io::duplex(1 << 24);
         tokio::spawn(async move { file_ref.to_writer(&mut writer).await });
         Ok(reader)
     }

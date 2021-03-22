@@ -212,7 +212,8 @@ impl FilePart {
             .enumerate()
             .collect::<Vec<_>>();
         let all_chunks = Arc::new(Mutex::new(all_chunks_owned));
-        let mut indexed_chunks = self.data
+        let mut indexed_chunks = self
+            .data
             .iter()
             .map(|_| {
                 let all_chunks = all_chunks.clone();
@@ -223,11 +224,14 @@ impl FilePart {
                             return None;
                         }
                         let sample = rand::thread_rng().gen_range(0..all_chunks.len());
-                        let (index, mut chunks) = all_chunks.remove(sample);
+                        let (index, mut chunk) = all_chunks.remove(sample);
                         drop(all_chunks);
-                        for location in chunks.locations.drain(..) {
+                        for location in chunk.locations.drain(..) {
                             if let Some(data) = location.read().await {
-                                return Some((index, data));
+                                let (data, hash) = Sha256Hash::from_vec_async(data).await;
+                                if hash == chunk.sha256 {
+                                    return Some((index, data));
+                                }
                             }
                         }
                     }
@@ -236,13 +240,22 @@ impl FilePart {
             .collect::<FuturesOrdered<_>>()
             .collect::<Vec<Option<(usize, Vec<u8>)>>>()
             .await;
-        let mut all_read_chunks: Vec<Option<Vec<u8>>> = self.data.iter().chain(self.parity.iter()).map(|_| None).collect();
+        let mut all_read_chunks: Vec<Option<Vec<u8>>> = self
+            .data
+            .iter()
+            .chain(self.parity.iter())
+            .map(|_| None)
+            .collect();
         for indexed_chunk in indexed_chunks.drain(..) {
-            if let Some((index,chunk)) = indexed_chunk {
+            if let Some((index, chunk)) = indexed_chunk {
                 *all_read_chunks.get_mut(index).unwrap() = Some(chunk);
             }
         }
-        if !all_read_chunks.iter().take(self.data.len()).all(Option::is_some) {
+        if !all_read_chunks
+            .iter()
+            .take(self.data.len())
+            .all(Option::is_some)
+        {
             r.reconstruct(&mut all_read_chunks)?;
         }
         let mut output = Vec::<u8>::new();
@@ -324,6 +337,15 @@ pub struct HashWithLocation<T: Serialize + Clone + PartialEq + Eq + Hash + Parti
 pub struct Sha256Hash(#[serde(with = "hex")] [u8; 32]);
 
 impl Sha256Hash {
+    pub async fn from_vec_async(buf: Vec<u8>) -> (Vec<u8>, Self) {
+        tokio::spawn(async move {
+            let hash = Sha256Hash::from_buf(&buf);
+            (buf, hash)
+        })
+        .await
+        .unwrap()
+    }
+
     pub fn from_buf<T>(buf: &T) -> Self
     where
         T: AsRef<[u8]>,
