@@ -62,12 +62,13 @@ impl Cluster {
         filename: &str,
         reader: &mut R,
         profile: &ClusterProfile,
+        content_type: Option<String>,
     ) -> Result<(), Error>
     where
         R: AsyncRead + Unpin,
     {
         let destination = self.get_destination(profile).await;
-        let file_ref = file::FileReference::from_reader(
+        let mut file_ref = file::FileReference::from_reader(
             reader,
             Arc::new(destination),
             1 << profile.get_chunk_size(),
@@ -75,6 +76,7 @@ impl Cluster {
             profile.get_parity_chunks(),
         )
         .await?;
+        file_ref.content_type = content_type;
         self.metadata.write(&filename, &file_ref).await?;
         Ok(())
     }

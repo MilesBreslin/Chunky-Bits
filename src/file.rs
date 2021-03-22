@@ -49,6 +49,8 @@ use crate::Error;
 pub struct FileReference {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compression: Option<Compression>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
     pub length: Option<u64>,
     pub parts: Vec<FilePart>,
 }
@@ -157,6 +159,7 @@ impl FileReference {
         } else {
             let parts = parts_res.drain(..).filter_map(Result::ok).collect();
             Ok(FileReference {
+                content_type: None,
                 compression: None,
                 length: Some(total_bytes),
                 parts: parts,
