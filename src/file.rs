@@ -74,59 +74,77 @@ impl FileReference {
         let mut done = false;
         let mut total_bytes: u64 = 0;
         while !done {
-            let mut bufs: Vec<Vec<u8>> = (0..(data + parity))
-                .map(|_| (0..chunksize).map(|_| 0).collect())
+            // data * chunksize all initialized to 0
+            let mut data_buf: Vec<u8> = (0..data)
+                .flat_map(|_| (0..chunksize).map(|_| 0))
                 .collect();
-            let mut wrote_data = false;
-            'buffers: for buf in bufs.iter_mut().take(data) {
-                let mut buf = &mut buf[..];
+            let mut bytes_read: usize = 0;
+            {
+                let mut buf = &mut data_buf[..];
                 while buf.len() != 0 {
                     match reader.read(&mut buf).await {
-                        Ok(bytes_written) if bytes_written > 0 => {
-                            wrote_data = true;
-                            total_bytes += bytes_written as u64;
-                            buf = &mut buf[bytes_written..];
+                        Ok(bytes) if bytes > 0 => {
+                            bytes_read += bytes;
+                            buf = &mut buf[bytes..];
                         },
-                        Err(_) | Ok(_) => {
+                        Ok(_) => {
                             done = true;
-                            break 'buffers;
+                            break
+                        },
+                        Err(err) => {
+                            return Err(err.into());
                         },
                     }
                 }
             }
-
-            if wrote_data {
+            total_bytes += bytes_read as u64;
+            if bytes_read == 0 {
+                break;
+            } else {
                 let r = r.clone();
                 let destination = destination.clone();
                 parts_fut.push(tokio::spawn(async move {
-                    r.encode(&mut bufs)?;
-                    let buf_futures: FuturesOrdered<_> = bufs
-                        .drain(..)
-                        .map(|data| {
-                            tokio::spawn(async move {
-                                let hash = Sha256Hash::from_buf(&data);
-                                (data, hash)
-                            })
+                    // Move data_buf into scope and make it immutable
+                    let data_buf = data_buf.as_slice();
+                    // Divide the bytes into bytes_read/data rounded up chunks
+                    let buf_length = (bytes_read + data - 1) / data;
+                    let data_chunks: Vec<&[u8]> = (0..data)
+                        .map(|index| -> &[u8] {
+                            &data_buf[(buf_length*index)..(buf_length*(index+1))]
                         })
                         .collect();
-                    let (mut bufs, mut hashes): (Vec<Vec<u8>>, Vec<Sha256Hash>) =
-                        buf_futures.map(|res| res.unwrap()).unzip().await;
-                    let mut writers = destination.get_writers(hashes.len()).unwrap();
-                    let mut write_results =
-                        bufs.drain(..)
-                            .zip(writers.drain(..))
-                            .zip(hashes.drain(..))
-                            .map(|((data, mut writer), hash)| async move {
-                                writer.write_shard(&format!("{}", hash), &data).await.map(
-                                    |locations| HashWithLocation {
-                                        sha256: hash,
-                                        locations: locations,
-                                    },
-                                )
-                            })
-                            .collect::<FuturesOrdered<_>>()
-                            .collect::<Vec<Result<HashWithLocation<Sha256Hash>, Error>>>()
-                            .await;
+
+                    // Zero out parity chunks
+                    let mut parity_chunks: Vec<Vec<u8>> = 
+                        vec![vec![0; buf_length]; parity];
+
+                    // Calculate parity
+                    r.encode_sep::<&[u8],Vec<u8>>(&data_chunks, &mut parity_chunks)?;
+
+                    // Get some writers
+                    let mut writers = destination.get_writers(data + parity).unwrap();
+
+                    // Hash and write all chunks
+                    let mut write_results = data_chunks
+                        .iter()
+                        .map(|slice| -> &[u8] {
+                            *slice
+                        })
+                        .chain(parity_chunks.iter().map(|vec| vec.as_slice()))
+                        .zip(writers.drain(..))
+                        .map(|(data, mut writer)| async move {
+                            let hash = Sha256Hash::from_buf(&data);
+                            writer.write_shard(&format!("{}", hash), &data).await.map(
+                                |locations| HashWithLocation {
+                                    sha256: hash,
+                                    locations: locations,
+                                },
+                            )
+                        })
+                        .collect::<FuturesOrdered<_>>()
+                        .collect::<Vec<Result<HashWithLocation<Sha256Hash>, Error>>>()
+                        .await;
+
                     if write_results.iter().any(Result::is_err) {
                         Err(write_results
                             .drain(..)
@@ -139,7 +157,7 @@ impl FileReference {
                             write_results.drain(..).filter_map(Result::ok).collect();
                         Ok(FilePart {
                             encryption: None,
-                            chunksize: Some(chunksize),
+                            chunksize: Some(buf_length),
                             data: hashes_with_location.drain(..data).collect(),
                             parity: hashes_with_location,
                         })
@@ -400,6 +418,27 @@ impl Sha256Hash {
         let mut ret = Sha256Hash(Default::default());
         ret.0.copy_from_slice(&Sha256::digest(buf.as_ref())[..]);
         ret
+    }
+
+    pub async fn from_buf_async(buf: &[u8]) -> Self {
+        struct SendMySlice {
+            ptr: *const u8,
+            len: usize,
+        }
+        unsafe impl Send for SendMySlice { }
+
+        let buf_ptr = SendMySlice {
+            len: buf.len(),
+            ptr: buf.as_ptr(),
+        };
+
+        // Safe because lifetime is valid until the function completes
+        unsafe {
+            tokio::task::spawn_blocking(move || {
+                let buf = std::slice::from_raw_parts(buf_ptr.ptr, buf_ptr.len);
+                Self::from_buf(&buf)
+            })
+        }.await.unwrap()
     }
 
     pub fn from_reader<R>(reader: &mut R) -> std::io::Result<Self>
