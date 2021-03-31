@@ -2,6 +2,7 @@ pub mod cluster;
 pub mod file;
 use std::{
     convert::Infallible,
+    num::NonZeroUsize,
     path::PathBuf,
     sync::Arc,
 };
@@ -108,6 +109,9 @@ pub enum Command {
         /// Chunk size in powers of 2 (20 == 1MiB)
         #[structopt(long, default_value)]
         chunk_size: ChunkSize,
+        /// The number of parts to write concurrently
+        #[structopt(long, default_value = "20")]
+        concurrency: NonZeroUsize,
     },
     /// Given only a list of shards, reconstruct the source
     DecodeShards {
@@ -373,6 +377,7 @@ async fn main() {
             chunk_size,
             data,
             parity,
+            concurrency,
         } => {
             let data: usize = data.into();
             let parity: usize = parity.into();
@@ -382,10 +387,16 @@ async fn main() {
             }
             let mut f = File::open(&file).await.unwrap();
             let writer = Arc::new(destination);
-            let file_ref =
-                file::FileReference::from_reader(&mut f, writer, 1 << chunk_size, data, parity)
-                    .await
-                    .unwrap();
+            let file_ref = file::FileReference::from_reader(
+                &mut f,
+                writer,
+                1 << chunk_size,
+                data,
+                parity,
+                concurrency,
+            )
+            .await
+            .unwrap();
             println!("{}", serde_yaml::to_string(&file_ref).unwrap());
         },
         Command::DecodeShards {

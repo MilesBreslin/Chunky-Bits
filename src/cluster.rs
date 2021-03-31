@@ -12,6 +12,7 @@ use std::{
     },
     fmt,
     marker::PhantomData,
+    num::NonZeroUsize,
     path::PathBuf,
     sync::Arc,
 };
@@ -74,6 +75,7 @@ impl Cluster {
             1 << profile.get_chunk_size(),
             profile.get_data_chunks(),
             profile.get_parity_chunks(),
+            NonZeroUsize::new(50).unwrap(),
         )
         .await?;
         file_ref.content_type = content_type;

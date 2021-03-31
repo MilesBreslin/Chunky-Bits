@@ -2,15 +2,19 @@ use std::{
     collections::HashMap,
     fmt,
     hash::Hash,
+    num::NonZeroUsize,
     path::PathBuf,
     str::FromStr,
     sync::Arc,
 };
 
 use async_trait::async_trait;
-use futures::stream::{
-    FuturesOrdered,
-    StreamExt,
+use futures::{
+    future::FutureExt,
+    stream::{
+        FuturesOrdered,
+        StreamExt,
+    },
 };
 use rand::{
     self,
@@ -39,7 +43,10 @@ use tokio::{
         AsyncWrite,
         AsyncWriteExt,
     },
-    sync::Mutex,
+    sync::{
+        mpsc,
+        Mutex,
+    },
     task::JoinHandle,
 };
 use url::Url;
@@ -63,21 +70,40 @@ impl FileReference {
         chunksize: usize,
         data: usize,
         parity: usize,
+        concurrency: NonZeroUsize,
     ) -> Result<Self, Error>
     where
         R: AsyncRead + Unpin,
         D: CollectionDestination + Send + Sync + 'static,
     {
-        let mut parts_fut = FuturesOrdered::<JoinHandle<Result<FilePart, Error>>>::new();
+        let mut concurent_parts: usize = concurrency.into();
+        // For each read of the channel, 1 part is allowed to start writing
+        // Each part on completion will write a result to it
+        let (err_sender, mut err_receiver) = mpsc::channel::<Result<(), Error>>(concurent_parts);
+
+        // A vec of task join handles that will be read at the end
+        // Errors will be reported both here and via the channel
+        let mut parts_fut = Vec::<JoinHandle<Option<FilePart>>>::new();
+
         let r: Arc<ReedSolomon<galois_8::Field>> =
             Arc::new(ReedSolomon::new(data, parity).unwrap());
         let mut done = false;
         let mut total_bytes: u64 = 0;
         while !done {
+            if concurent_parts == 0 {
+                if let Some(result) = err_receiver.recv().await {
+                    result?;
+                    concurent_parts += 1;
+                }
+            }
+            while let Some(Some(result)) = err_receiver.recv().now_or_never() {
+                let result: Result<(), Error> = result;
+                result?;
+                concurent_parts += 1;
+            }
+            concurent_parts -= 1;
             // data * chunksize all initialized to 0
-            let mut data_buf: Vec<u8> = (0..data)
-                .flat_map(|_| (0..chunksize).map(|_| 0))
-                .collect();
+            let mut data_buf: Vec<u8> = vec![0; data * chunksize];
             let mut bytes_read: usize = 0;
             {
                 let mut buf = &mut data_buf[..];
@@ -89,7 +115,7 @@ impl FileReference {
                         },
                         Ok(_) => {
                             done = true;
-                            break
+                            break;
                         },
                         Err(err) => {
                             return Err(err.into());
@@ -103,87 +129,96 @@ impl FileReference {
             } else {
                 let r = r.clone();
                 let destination = destination.clone();
+                let err_sender = err_sender.clone();
                 parts_fut.push(tokio::spawn(async move {
-                    // Move data_buf into scope and make it immutable
-                    let data_buf = data_buf.as_slice();
-                    // Divide the bytes into bytes_read/data rounded up chunks
-                    let buf_length = (bytes_read + data - 1) / data;
-                    let data_chunks: Vec<&[u8]> = (0..data)
-                        .map(|index| -> &[u8] {
-                            &data_buf[(buf_length*index)..(buf_length*(index+1))]
-                        })
-                        .collect();
+                    let result = async move {
+                        // Move data_buf into scope and make it immutable
+                        let data_buf = data_buf.as_slice();
+                        // Divide the bytes into bytes_read/data rounded up chunks
+                        let buf_length = (bytes_read + data - 1) / data;
+                        let data_chunks: Vec<&[u8]> = (0..data)
+                            .map(|index| -> &[u8] {
+                                &data_buf[(buf_length * index)..(buf_length * (index + 1))]
+                            })
+                            .collect();
 
-                    // Zero out parity chunks
-                    let mut parity_chunks: Vec<Vec<u8>> = 
-                        vec![vec![0; buf_length]; parity];
+                        // Zero out parity chunks
+                        let mut parity_chunks: Vec<Vec<u8>> = vec![vec![0; buf_length]; parity];
 
-                    // Calculate parity
-                    r.encode_sep::<&[u8],Vec<u8>>(&data_chunks, &mut parity_chunks)?;
+                        // Calculate parity
+                        r.encode_sep::<&[u8], Vec<u8>>(&data_chunks, &mut parity_chunks)?;
 
-                    // Get some writers
-                    let mut writers = destination.get_writers(data + parity).unwrap();
+                        // Get some writers
+                        let mut writers = destination.get_writers(data + parity).unwrap();
 
-                    // Hash and write all chunks
-                    let mut write_results = data_chunks
-                        .iter()
-                        .map(|slice| -> &[u8] {
-                            *slice
-                        })
-                        .chain(parity_chunks.iter().map(|vec| vec.as_slice()))
-                        .zip(writers.drain(..))
-                        .map(|(data, mut writer)| async move {
-                            let hash = Sha256Hash::from_buf(&data);
-                            writer.write_shard(&format!("{}", hash), &data).await.map(
-                                |locations| HashWithLocation {
-                                    sha256: hash,
-                                    locations: locations,
-                                },
-                            )
-                        })
-                        .collect::<FuturesOrdered<_>>()
-                        .collect::<Vec<Result<HashWithLocation<Sha256Hash>, Error>>>()
-                        .await;
+                        // Hash and write all chunks
+                        let mut write_results = data_chunks
+                            .iter()
+                            .map(|slice| -> &[u8] { *slice })
+                            .chain(parity_chunks.iter().map(|vec| vec.as_slice()))
+                            .zip(writers.drain(..))
+                            .map(|(data, mut writer)| async move {
+                                let hash = Sha256Hash::from_buf(&data);
+                                writer.write_shard(&format!("{}", hash), &data).await.map(
+                                    |locations| HashWithLocation {
+                                        sha256: hash,
+                                        locations: locations,
+                                    },
+                                )
+                            })
+                            .collect::<FuturesOrdered<_>>()
+                            .collect::<Vec<Result<HashWithLocation<Sha256Hash>, Error>>>()
+                            .await;
 
-                    if write_results.iter().any(Result::is_err) {
-                        Err(write_results
-                            .drain(..)
-                            .filter_map(Result::err)
-                            .next()
-                            .unwrap()
-                            .into())
-                    } else {
-                        let mut hashes_with_location: Vec<HashWithLocation<Sha256Hash>> =
-                            write_results.drain(..).filter_map(Result::ok).collect();
-                        Ok(FilePart {
-                            encryption: None,
-                            chunksize: Some(buf_length),
-                            data: hashes_with_location.drain(..data).collect(),
-                            parity: hashes_with_location,
-                        })
+                        if write_results.iter().any(Result::is_err) {
+                            Err(write_results
+                                .drain(..)
+                                .filter_map(Result::err)
+                                .next()
+                                .unwrap()
+                                .into())
+                        } else {
+                            let mut hashes_with_location: Vec<HashWithLocation<Sha256Hash>> =
+                                write_results.drain(..).filter_map(Result::ok).collect();
+                            Ok(FilePart {
+                                encryption: None,
+                                chunksize: Some(buf_length),
+                                data: hashes_with_location.drain(..data).collect(),
+                                parity: hashes_with_location,
+                            })
+                        }
+                    };
+                    let result: Result<_, Error> = result.await;
+                    match result {
+                        Ok(value) => {
+                            err_sender.send(Ok(())).await.unwrap();
+                            Some(value)
+                        },
+                        Err(err) => {
+                            err_sender.send(Err(err)).await.unwrap();
+                            None
+                        },
                     }
                 }))
             }
         }
-        let mut parts_res: Vec<Result<FilePart, Error>> = parts_fut
-            .map(|res| match res {
-                Ok(Ok(value)) => Ok(value),
-                Ok(Err(e)) => Err(e.into()),
-                Err(e) => Err(e.into()),
-            })
-            .collect()
-            .await;
-        if parts_res.iter().any(Result::is_err) {
-            Err(parts_res.drain(..).filter_map(Result::err).next().unwrap())
-        } else {
-            let parts = parts_res.drain(..).filter_map(Result::ok).collect();
-            Ok(FileReference {
-                content_type: None,
-                compression: None,
-                length: Some(total_bytes),
-                parts: parts,
-            })
+        drop(err_sender);
+        while let Some(result) = err_receiver.recv().await {
+            result?;
+            concurent_parts += 1;
         }
+        let mut parts_fut = parts_fut.drain(..);
+        let mut parts = Vec::with_capacity(parts_fut.len());
+        while let Some(part) = parts_fut.next() {
+            let part = part.await?;
+            parts.push(part.unwrap());
+        }
+        Ok(FileReference {
+            content_type: None,
+            compression: None,
+            length: Some(total_bytes),
+            parts: parts,
+        })
     }
 
     pub async fn to_writer<W>(&self, writer: &mut W) -> Result<(), Error>
@@ -425,7 +460,7 @@ impl Sha256Hash {
             ptr: *const u8,
             len: usize,
         }
-        unsafe impl Send for SendMySlice { }
+        unsafe impl Send for SendMySlice {}
 
         let buf_ptr = SendMySlice {
             len: buf.len(),
@@ -438,7 +473,9 @@ impl Sha256Hash {
                 let buf = std::slice::from_raw_parts(buf_ptr.ptr, buf_ptr.len);
                 Self::from_buf(&buf)
             })
-        }.await.unwrap()
+        }
+        .await
+        .unwrap()
     }
 
     pub fn from_reader<R>(reader: &mut R) -> std::io::Result<Self>
