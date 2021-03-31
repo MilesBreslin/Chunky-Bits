@@ -1,39 +1,24 @@
 use std::{
-    collections::HashMap,
     fmt,
     hash::Hash,
-    num::NonZeroUsize,
     path::PathBuf,
     str::FromStr,
-    sync::Arc,
 };
 
 use async_trait::async_trait;
 use futures::{
     future::FutureExt,
-    stream::StreamExt,
 };
 use serde::{
     Deserialize,
     Serialize,
 };
-use sha2::Digest;
 use tokio::{
     fs::{
         self,
         File,
     },
-    io::{
-        AsyncRead,
-        AsyncReadExt,
-        AsyncWrite,
-        AsyncWriteExt,
-    },
-    sync::{
-        mpsc,
-        Mutex,
-    },
-    task::JoinHandle,
+    io::AsyncWriteExt,
 };
 use url::Url;
 

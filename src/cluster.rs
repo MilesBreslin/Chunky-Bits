@@ -6,9 +6,7 @@ use std::{
         HashMap,
         HashSet,
     },
-    convert::{
-        TryFrom,
-    },
+    convert::TryFrom,
     fmt,
     marker::PhantomData,
     num::NonZeroUsize,

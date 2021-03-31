@@ -1,19 +1,12 @@
 use std::{
     collections::HashMap,
-    fmt,
     hash::Hash,
-    num::NonZeroUsize,
-    path::PathBuf,
-    str::FromStr,
     sync::Arc,
 };
 
-use futures::{
-    future::FutureExt,
-    stream::{
-        FuturesOrdered,
-        StreamExt,
-    },
+use futures::stream::{
+    FuturesOrdered,
+    StreamExt,
 };
 use rand::{
     self,
@@ -27,23 +20,9 @@ use serde::{
     Deserialize,
     Serialize,
 };
-use sha2::Digest;
 use tokio::{
-    fs::{
-        self,
-        File,
-    },
-    io::{
-        AsyncRead,
-        AsyncReadExt,
-        AsyncWrite,
-        AsyncWriteExt,
-    },
-    sync::{
-        mpsc,
-        Mutex,
-    },
-    task::JoinHandle,
+    self,
+    sync::Mutex,
 };
 
 use crate::file::{
