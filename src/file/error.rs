@@ -1,13 +1,14 @@
-use crate::file::Location;
 use std::{
     error::Error,
-    io,
     fmt::{
         self,
-        Formatter,
         Display,
+        Formatter,
     },
+    io,
 };
+
+use crate::file::Location;
 
 macro_rules! impl_from_err {
     ($error_type:ty => $variant:ident for $parent:ident) => {
@@ -54,7 +55,7 @@ impl Display for FileWriteError {
 
 impl Error for FileWriteError {}
 
-impl_from_err!{
+impl_from_err! {
     {
         reed_solomon_erasure::Error => Erasure,
         tokio::task::JoinError => JoinError,
@@ -102,17 +103,13 @@ impl Error for LocationError {}
 impl From<reqwest::Error> for LocationError {
     fn from(err: reqwest::Error) -> Self {
         match err.status() {
-            Some(status) if !status.is_success() => {
-                LocationError::HttpStatus(status)
-            },
-            _ => {
-                LocationError::HttpError(err)
-            }
+            Some(status) if !status.is_success() => LocationError::HttpStatus(status),
+            _ => LocationError::HttpError(err),
         }
     }
 }
 
-impl_from_err!{
+impl_from_err! {
     {
         io::Error => IoError,
         reqwest::StatusCode => HttpStatus,
@@ -126,7 +123,7 @@ pub enum FileReadError {
     WriterError(io::Error),
 }
 
-impl_from_err!{
+impl_from_err! {
     {
         reed_solomon_erasure::Error => Erasure,
         ShardError => FilePart,
@@ -141,7 +138,7 @@ pub enum ClusterError {
     FileRead(FileReadError),
 }
 
-impl_from_err!{
+impl_from_err! {
     {
         FileWriteError => FileWrite,
         MetadataReadError => FileMetadataRead,
@@ -167,7 +164,7 @@ impl Display for SerdeError {
 
 impl std::error::Error for SerdeError {}
 
-impl_from_err!{
+impl_from_err! {
     {
         serde_json::Error => Json,
         serde_yaml::Error => Yaml,
@@ -181,7 +178,7 @@ pub enum MetadataReadError {
     Serde(SerdeError),
 }
 
-impl_from_err!{
+impl_from_err! {
     {
         LocationError => FileRead,
         SerdeError => Serde,
@@ -194,7 +191,7 @@ pub enum HttpUrlError {
     NotHttp,
 }
 
-impl_from_err!{
+impl_from_err! {
     {
         url::ParseError => Parse,
     } for HttpUrlError

@@ -19,11 +19,9 @@ use serde::{
     Serialize,
 };
 
-use crate::{
-    file::{
-        *,
-        error::*,
-    },
+use crate::file::{
+    error::*,
+    *,
 };
 
 pub trait CollectionDestination {

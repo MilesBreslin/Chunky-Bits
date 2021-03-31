@@ -37,11 +37,9 @@ use tokio::{
 };
 use url::Url;
 
-use crate::{
-    file::{
-        *,
-        error::*,
-    },
+use crate::file::{
+    error::*,
+    *,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -65,7 +63,11 @@ impl Location {
         }
     }
 
-    pub(crate) async fn write_subfile(&self, name: &str, bytes: &[u8]) -> Result<Location, ShardError> {
+    pub(crate) async fn write_subfile(
+        &self,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<Location, ShardError> {
         use Location::*;
         match self {
             Http(url) => {
@@ -89,9 +91,7 @@ impl Location {
                 let mut target_path = path.clone();
                 target_path.push(name);
                 let result = File::create(&target_path)
-                    .then(|res| async move {
-                        res?.write_all(bytes).await
-                    })
+                    .then(|res| async move { res?.write_all(bytes).await })
                     .await;
                 let location = Local(target_path);
                 match result {

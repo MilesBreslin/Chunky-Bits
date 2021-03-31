@@ -43,12 +43,10 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{
-    file::{
-        hash::*,
-        error::*,
-        *,
-    },
+use crate::file::{
+    error::*,
+    hash::*,
+    *,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,7 +75,8 @@ impl FileReference {
         let mut concurrent_parts: usize = concurrency.into();
         // For each read of the channel, 1 part is allowed to start writing
         // Each part on completion will write a result to it
-        let (err_sender, mut err_receiver) = mpsc::channel::<Result<(), FileWriteError>>(concurrent_parts);
+        let (err_sender, mut err_receiver) =
+            mpsc::channel::<Result<(), FileWriteError>>(concurrent_parts);
 
         // A vec of task join handles that will be read at the end
         // Errors will be reported both here and via the channel

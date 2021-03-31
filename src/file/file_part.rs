@@ -46,12 +46,10 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{
-    file::{
-        hash::*,
-        error::*,
-        *,
-    },
+use crate::file::{
+    error::*,
+    hash::*,
+    *,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -143,9 +141,7 @@ impl FilePart {
                                 Integrity::Invalid
                             }
                         },
-                        Err(_err) => {
-                            Integrity::Unavailable
-                        },
+                        Err(_err) => Integrity::Unavailable,
                     }
                 };
                 out.insert(location, integrity);

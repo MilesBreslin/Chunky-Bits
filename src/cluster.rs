@@ -7,7 +7,6 @@ use std::{
         HashSet,
     },
     convert::{
-        Infallible,
         TryFrom,
     },
     fmt,
@@ -34,16 +33,14 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::{
-    file::{
-        self,
-        CollectionDestination,
-        FileReference,
-        Location,
-        ShardWriter,
-        WeightedLocation,
-        error::*,
-    },
+use crate::file::{
+    self,
+    error::*,
+    CollectionDestination,
+    FileReference,
+    Location,
+    ShardWriter,
+    WeightedLocation,
 };
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -87,7 +84,10 @@ impl Cluster {
         self.metadata.read(&filename).await
     }
 
-    pub async fn read_file(&self, filename: &str) -> Result<impl AsyncRead + Unpin, MetadataReadError> {
+    pub async fn read_file(
+        &self,
+        filename: &str,
+    ) -> Result<impl AsyncRead + Unpin, MetadataReadError> {
         let file_ref = self.get_file_ref(filename).await?;
         let (reader, mut writer) = tokio::io::duplex(1 << 24);
         tokio::spawn(async move { file_ref.to_writer(&mut writer).await });
@@ -156,7 +156,8 @@ impl MetadataPath {
             &format!("{}/{}", self.path.display(), filename.borrow()),
             payload,
         )
-        .await.map_err(LocationError::from)?;
+        .await
+        .map_err(LocationError::from)?;
         if let Some(put_script) = &self.put_script {
             let res = Command::new("/bin/sh")
                 .arg("-c")
@@ -180,7 +181,8 @@ impl MetadataPath {
         T: std::borrow::Borrow<str>,
         U: DeserializeOwned,
     {
-        let bytes = fs::read(&format!("{}/{}", self.path.display(), filename.borrow())).await
+        let bytes = fs::read(&format!("{}/{}", self.path.display(), filename.borrow()))
+            .await
             .map_err(LocationError::from)?;
         Ok(self.format.from_bytes(&bytes)?)
     }
