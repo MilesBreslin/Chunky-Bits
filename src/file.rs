@@ -13,6 +13,7 @@ use futures::{
     future::FutureExt,
     stream::{
         FuturesOrdered,
+        FuturesUnordered,
         StreamExt,
     },
 };
@@ -76,10 +77,10 @@ impl FileReference {
         R: AsyncRead + Unpin,
         D: CollectionDestination + Send + Sync + 'static,
     {
-        let mut concurent_parts: usize = concurrency.into();
+        let mut concurrent_parts: usize = concurrency.into();
         // For each read of the channel, 1 part is allowed to start writing
         // Each part on completion will write a result to it
-        let (err_sender, mut err_receiver) = mpsc::channel::<Result<(), Error>>(concurent_parts);
+        let (err_sender, mut err_receiver) = mpsc::channel::<Result<(), Error>>(concurrent_parts);
 
         // A vec of task join handles that will be read at the end
         // Errors will be reported both here and via the channel
@@ -89,22 +90,32 @@ impl FileReference {
             Arc::new(ReedSolomon::new(data, parity).unwrap());
         let mut done = false;
         let mut total_bytes: u64 = 0;
-        while !done {
-            if concurent_parts == 0 {
+        let mut write_error: Result<(), Error> = Ok(());
+        'file: while !done {
+            // Wait to be allowed to read/write a part
+            if concurrent_parts == 0 {
                 if let Some(result) = err_receiver.recv().await {
-                    result?;
-                    concurent_parts += 1;
+                    if let Err(err) = result {
+                        write_error = Err(err);
+                        break 'file;
+                    }
+                    concurrent_parts += 1;
                 }
             }
+            // Clear any other reads
             while let Some(Some(result)) = err_receiver.recv().now_or_never() {
-                let result: Result<(), Error> = result;
-                result?;
-                concurent_parts += 1;
+                if let Err(err) = result {
+                    write_error = Err(err);
+                    break 'file;
+                }
+                concurrent_parts += 1;
             }
-            concurent_parts -= 1;
+            // Reduce allowed concurrent parts
+            concurrent_parts -= 1;
             // data * chunksize all initialized to 0
             let mut data_buf: Vec<u8> = vec![0; data * chunksize];
             let mut bytes_read: usize = 0;
+            // read_exact, but handle end-of-file
             {
                 let mut buf = &mut data_buf[..];
                 while buf.len() != 0 {
@@ -118,7 +129,8 @@ impl FileReference {
                             break;
                         },
                         Err(err) => {
-                            return Err(err.into());
+                            write_error = Err(err.into());
+                            break 'file;
                         },
                     }
                 }
@@ -127,10 +139,13 @@ impl FileReference {
             if bytes_read == 0 {
                 break;
             } else {
+                // Clone some values that will be moved into the task
                 let r = r.clone();
                 let destination = destination.clone();
                 let err_sender = err_sender.clone();
                 parts_fut.push(tokio::spawn(async move {
+                    // Run as seperate future
+                    // Allows use of return statements and ? operator
                     let result = async move {
                         // Move data_buf into scope and make it immutable
                         let data_buf = data_buf.as_slice();
@@ -152,61 +167,90 @@ impl FileReference {
                         let mut writers = destination.get_writers(data + parity).unwrap();
 
                         // Hash and write all chunks
-                        let mut write_results = data_chunks
+                        let mut write_results_iter = data_chunks
                             .iter()
                             .map(|slice| -> &[u8] { *slice })
                             .chain(parity_chunks.iter().map(|vec| vec.as_slice()))
                             .zip(writers.drain(..))
-                            .map(|(data, mut writer)| async move {
+                            .enumerate()
+                            .map(|(index, (data, mut writer))| async move {
                                 let hash = Sha256Hash::from_buf(&data);
-                                writer.write_shard(&format!("{}", hash), &data).await.map(
-                                    |locations| HashWithLocation {
-                                        sha256: hash,
-                                        locations: locations,
-                                    },
-                                )
+                                let hash_with_location = writer
+                                    .write_shard(&format!("{}", hash), &data)
+                                    .await
+                                    .map(|locations|
+                                        HashWithLocation {
+                                            sha256: hash,
+                                            locations: locations,
+                                        },
+                                    );
+                                (index, hash_with_location)
                             })
-                            .collect::<FuturesOrdered<_>>()
-                            .collect::<Vec<Result<HashWithLocation<Sha256Hash>, Error>>>()
-                            .await;
-
-                        if write_results.iter().any(Result::is_err) {
-                            Err(write_results
-                                .drain(..)
-                                .filter_map(Result::err)
-                                .next()
-                                .unwrap()
-                                .into())
-                        } else {
-                            let mut hashes_with_location: Vec<HashWithLocation<Sha256Hash>> =
-                                write_results.drain(..).filter_map(Result::ok).collect();
-                            Ok(FilePart {
-                                encryption: None,
-                                chunksize: Some(buf_length),
-                                data: hashes_with_location.drain(..data).collect(),
-                                parity: hashes_with_location,
-                            })
+                            .collect::<FuturesUnordered<_>>();
+                        // Collect the stream manually to handle errors out-of-order
+                        let mut hashes_with_location: Vec<Option<HashWithLocation<Sha256Hash>>>
+                            = vec![None ; data + parity];
+                        while let Some((index, result)) = write_results_iter.next().await {
+                            let result = result?;
+                            hashes_with_location[index] = Some(result);
                         }
+
+                        Ok(FilePart {
+                            encryption: None,
+                            chunksize: Some(buf_length),
+                            data: hashes_with_location
+                                .drain(..data)
+                                .map(Option::unwrap)
+                                .collect(),
+                            parity: hashes_with_location
+                                .drain(..)
+                                .map(Option::unwrap)
+                                .collect(),
+                        })
                     };
+                    // Send the error to the error channel
+                    // Return option of value
                     let result: Result<_, Error> = result.await;
                     match result {
                         Ok(value) => {
-                            err_sender.send(Ok(())).await.unwrap();
+                            let _result = err_sender.send(Ok(())).await;
                             Some(value)
                         },
                         Err(err) => {
-                            err_sender.send(Err(err)).await.unwrap();
+                            let _result = err_sender.send(Err(err)).await;
                             None
                         },
                     }
                 }))
             }
         }
+        // Drop the sender owned by this thread. Will block indefinitely otherwise
         drop(err_sender);
-        while let Some(result) = err_receiver.recv().await {
-            result?;
-            concurent_parts += 1;
+        // If there has been an error abort all tasks and quit
+        loop {
+            // If no known error, check for new errors and break if done
+            if let Ok(_) = &write_error {
+                match err_receiver.recv().await {
+                    None => {
+                        break;
+                    },
+                    Some(Err(err)) => {
+                        write_error = Err(err);
+                    },
+                    Some(_) => {
+                        continue;
+                    },
+                }
+            }
+            // If error, abort everything and return
+            if let Err(err) = write_error {
+                for task in parts_fut {
+                    task.abort();
+                }
+                return Err(err);
+            }
         }
+        // Read the tasks return values into a new vec
         let mut parts_fut = parts_fut.drain(..);
         let mut parts = Vec::with_capacity(parts_fut.len());
         while let Some(part) = parts_fut.next() {
