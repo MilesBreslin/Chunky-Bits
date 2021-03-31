@@ -9,3 +9,4 @@ pub use collection_destination::*;
 mod weighted_location;
 pub use weighted_location::*;
 pub mod hash;
+pub mod error;
