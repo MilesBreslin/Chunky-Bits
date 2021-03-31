@@ -11,28 +11,13 @@ use std::{
 use async_trait::async_trait;
 use futures::{
     future::FutureExt,
-    stream::{
-        FuturesOrdered,
-        FuturesUnordered,
-        StreamExt,
-    },
-};
-use rand::{
-    self,
-    Rng,
-};
-use reed_solomon_erasure::{
-    galois_8,
-    ReedSolomon,
+    stream::StreamExt,
 };
 use serde::{
     Deserialize,
     Serialize,
 };
-use sha2::{
-    Digest,
-    Sha256,
-};
+use sha2::Digest;
 use tokio::{
     fs::{
         self,
@@ -53,8 +38,8 @@ use tokio::{
 use url::Url;
 
 use crate::{
-    Error,
     file::*,
+    Error,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

@@ -8,7 +8,6 @@ use std::{
     sync::Arc,
 };
 
-use async_trait::async_trait;
 use futures::{
     future::FutureExt,
     stream::{
@@ -16,10 +15,6 @@ use futures::{
         FuturesUnordered,
         StreamExt,
     },
-};
-use rand::{
-    self,
-    Rng,
 };
 use reed_solomon_erasure::{
     galois_8,
@@ -29,10 +24,7 @@ use serde::{
     Deserialize,
     Serialize,
 };
-use sha2::{
-    Digest,
-    Sha256,
-};
+use sha2::Digest;
 use tokio::{
     fs::{
         self,
@@ -50,14 +42,13 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use url::Url;
 
 use crate::{
-    Error,
     file::{
-        *,
         hash::*,
+        *,
     },
+    Error,
 };
 
 #[derive(Debug, Serialize, Deserialize)]

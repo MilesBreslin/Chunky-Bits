@@ -5,6 +5,19 @@ use std::{
     sync::Arc,
 };
 
+use chunky_bits::{
+    cluster::{
+        ChunkSize,
+        Cluster,
+        DataChunkCount,
+        ParityChunkCount,
+    },
+    file,
+    file::{
+        FileReference,
+        WeightedLocation,
+    },
+};
 use futures::stream::{
     FuturesOrdered,
     Stream,
@@ -38,18 +51,6 @@ use warp::{
         StatusCode,
     },
     hyper::body::Body,
-};
-
-use chunky_bits::{
-    cluster::{
-        ChunkSize,
-        Cluster,
-        DataChunkCount,
-        ParityChunkCount,
-    },
-    file::WeightedLocation,
-    file::FileReference,
-    file,
 };
 
 #[derive(StructOpt)]
