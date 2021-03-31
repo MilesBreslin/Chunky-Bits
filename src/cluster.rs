@@ -44,7 +44,6 @@ use crate::{
         WeightedLocation,
         error::*,
     },
-    Error,
 };
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -65,7 +64,7 @@ impl Cluster {
         reader: &mut R,
         profile: &ClusterProfile,
         content_type: Option<String>,
-    ) -> Result<(), FileWriteError>
+    ) -> Result<(), ClusterError>
     where
         R: AsyncRead + Unpin,
     {
@@ -84,11 +83,11 @@ impl Cluster {
         Ok(())
     }
 
-    pub async fn get_file_ref(&self, filename: &str) -> Result<FileReference, Error> {
+    pub async fn get_file_ref(&self, filename: &str) -> Result<FileReference, MetadataReadError> {
         self.metadata.read(&filename).await
     }
 
-    pub async fn read_file(&self, filename: &str) -> Result<impl AsyncRead + Unpin, Error> {
+    pub async fn read_file(&self, filename: &str) -> Result<impl AsyncRead + Unpin, MetadataReadError> {
         let file_ref = self.get_file_ref(filename).await?;
         let (reader, mut writer) = tokio::io::duplex(1 << 24);
         tokio::spawn(async move { file_ref.to_writer(&mut writer).await });
@@ -115,7 +114,7 @@ enum MetadataTypes {
 }
 
 impl MetadataTypes {
-    pub async fn write<T, U>(&self, filename: &T, payload: &U) -> Result<(), Error>
+    pub async fn write<T, U>(&self, filename: &T, payload: &U) -> Result<(), MetadataReadError>
     where
         T: std::borrow::Borrow<str>,
         U: Serialize,
@@ -125,7 +124,7 @@ impl MetadataTypes {
         }
     }
 
-    pub async fn read<T, U>(&self, filename: &T) -> Result<U, Error>
+    pub async fn read<T, U>(&self, filename: &T) -> Result<U, MetadataReadError>
     where
         T: std::borrow::Borrow<str>,
         U: DeserializeOwned,
@@ -147,7 +146,7 @@ struct MetadataPath {
 }
 
 impl MetadataPath {
-    pub async fn write<T, U>(&self, filename: &T, payload: &U) -> Result<(), Error>
+    pub async fn write<T, U>(&self, filename: &T, payload: &U) -> Result<(), MetadataReadError>
     where
         T: std::borrow::Borrow<str>,
         U: Serialize,
@@ -157,7 +156,7 @@ impl MetadataPath {
             &format!("{}/{}", self.path.display(), filename.borrow()),
             payload,
         )
-        .await?;
+        .await.map_err(LocationError::from)?;
         if let Some(put_script) = &self.put_script {
             let res = Command::new("/bin/sh")
                 .arg("-c")
@@ -168,19 +167,22 @@ impl MetadataPath {
                 .wait()
                 .await;
             if self.fail_on_script_error {
-                res?;
+                if let Err(err) = res {
+                    return Err(MetadataReadError::PostExec(err));
+                }
             }
         }
         Ok(())
     }
 
-    pub async fn read<T, U>(&self, filename: &T) -> Result<U, Error>
+    pub async fn read<T, U>(&self, filename: &T) -> Result<U, MetadataReadError>
     where
         T: std::borrow::Borrow<str>,
         U: DeserializeOwned,
     {
-        let bytes = fs::read(&format!("{}/{}", self.path.display(), filename.borrow())).await?;
-        self.format.from_bytes(&bytes)
+        let bytes = fs::read(&format!("{}/{}", self.path.display(), filename.borrow())).await
+            .map_err(LocationError::from)?;
+        Ok(self.format.from_bytes(&bytes)?)
     }
 }
 
@@ -200,7 +202,7 @@ impl Default for MetadataFormat {
 }
 
 impl MetadataFormat {
-    fn to_string<T>(&self, payload: &T) -> Result<String, Error>
+    fn to_string<T>(&self, payload: &T) -> Result<String, SerdeError>
     where
         T: Serialize,
     {
@@ -212,7 +214,7 @@ impl MetadataFormat {
         })
     }
 
-    fn from_bytes<T, U>(&self, v: &T) -> Result<U, Error>
+    fn from_bytes<T, U>(&self, v: &T) -> Result<U, SerdeError>
     where
         T: AsRef<[u8]>,
         U: DeserializeOwned,
@@ -420,11 +422,11 @@ struct ClusterWriterInnerState {
     available_indexes: HashMap<usize, usize>,
     failed_indexes: HashSet<usize>,
     zone_status: ZoneRules,
-    errors: Vec<ShardWriterError>,
+    errors: Vec<ShardError>,
 }
 
 impl ClusterWriterState {
-    async fn next_writer(&self) -> Result<(usize, &ClusterNode), ShardWriterError> {
+    async fn next_writer(&self) -> Result<(usize, &ClusterNode), ShardError> {
         let (nodes, _profile) = self.parent.0.as_ref();
         let mut state = self.inner_state.lock().await;
         let ClusterWriterInnerState {
@@ -529,7 +531,7 @@ impl ClusterWriterState {
         Err(errors.pop().unwrap())
     }
 
-    async fn invalidate_index(&self, index: usize, err: ShardWriterError) -> () {
+    async fn invalidate_index(&self, index: usize, err: ShardError) -> () {
         let (nodes, _profile) = self.parent.0.as_ref();
         let mut state = self.inner_state.lock().await;
         state.failed_indexes.insert(index);
@@ -561,7 +563,7 @@ struct ClusterWriter {
 
 #[async_trait]
 impl ShardWriter for ClusterWriter {
-    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardWriterError> {
+    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardError> {
         loop {
             match self.state.as_ref().next_writer().await {
                 Ok((index, node)) => {

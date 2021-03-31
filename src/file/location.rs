@@ -42,7 +42,6 @@ use crate::{
         *,
         error::*,
     },
-    Error,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -53,17 +52,20 @@ pub enum Location {
 }
 
 impl Location {
-    pub(crate) async fn read(&self) -> Option<Vec<u8>> {
+    pub(crate) async fn read(&self) -> Result<Vec<u8>, LocationError> {
         match self {
-            Location::Local(path) => fs::read(&path).await.ok(),
+            Location::Local(path) => match fs::read(&path).await {
+                Ok(bytes) => Ok(bytes),
+                Err(err) => Err(err.into()),
+            },
             Location::Http(url) => match reqwest::get(Into::<Url>::into(url.clone())).await {
-                Ok(resp) => resp.bytes().await.ok().map(|b| b.into_iter().collect()),
-                Err(_) => None,
+                Ok(resp) => Ok(resp.bytes().await?.into_iter().collect()),
+                Err(err) => Err(err.into()),
             },
         }
     }
 
-    pub(crate) async fn write_subfile(&self, name: &str, bytes: &[u8]) -> Result<Location, ShardWriterError> {
+    pub(crate) async fn write_subfile(&self, name: &str, bytes: &[u8]) -> Result<Location, ShardError> {
         use Location::*;
         match self {
             Http(url) => {
@@ -76,8 +78,8 @@ impl Location {
                     .await;
                 let location = Http(HttpUrl(target_url));
                 match result {
-                    Ok(loc) => Ok(location),
-                    Err(err) => Err(ShardWriterError {
+                    Ok(_) => Ok(location),
+                    Err(err) => Err(ShardError {
                         location: location,
                         error: err.into(),
                     }),
@@ -93,8 +95,8 @@ impl Location {
                     .await;
                 let location = Local(target_path);
                 match result {
-                    Ok(loc) => Ok(location),
-                    Err(err) => Err(ShardWriterError {
+                    Ok(_) => Ok(location),
+                    Err(err) => Err(ShardError {
                         location: location,
                         error: err.into(),
                     }),
@@ -112,7 +114,7 @@ impl fmt::Display for Location {
 
 #[async_trait]
 impl ShardWriter for Location {
-    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardWriterError> {
+    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardError> {
         self.write_subfile(hash, bytes)
             .await
             .map(|location| vec![location])
@@ -120,7 +122,7 @@ impl ShardWriter for Location {
 }
 
 impl FromStr for Location {
-    type Err = Error;
+    type Err = HttpUrlError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("http://") || s.starts_with("https://") {
@@ -142,7 +144,7 @@ pub struct HashWithLocation<T: Serialize + Clone + PartialEq + Eq + Hash + Parti
 pub struct HttpUrl(Url);
 
 impl FromStr for HttpUrl {
-    type Err = Error;
+    type Err = HttpUrlError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use std::convert::TryFrom;
@@ -157,12 +159,12 @@ impl Into<Url> for HttpUrl {
 }
 
 impl std::convert::TryFrom<Url> for HttpUrl {
-    type Error = Error;
+    type Error = HttpUrlError;
 
     fn try_from(u: Url) -> Result<Self, Self::Error> {
         match u.scheme() {
             "http" | "https" => Ok(Self(u)),
-            _ => Err(Error::NotHttp),
+            _ => Err(HttpUrlError::NotHttp),
         }
     }
 }

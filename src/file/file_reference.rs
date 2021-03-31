@@ -49,7 +49,6 @@ use crate::{
         error::*,
         *,
     },
-    Error,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -258,7 +257,7 @@ impl FileReference {
         })
     }
 
-    pub async fn to_writer<W>(&self, writer: &mut W) -> Result<(), Error>
+    pub async fn to_writer<W>(&self, writer: &mut W) -> Result<(), FileReadError>
     where
         W: AsyncWrite + Unpin,
     {

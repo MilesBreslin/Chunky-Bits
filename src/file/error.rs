@@ -9,6 +9,26 @@ use std::{
     },
 };
 
+macro_rules! impl_from_err {
+    ($error_type:ty => $variant:ident for $parent:ident) => {
+        impl From<$error_type> for $parent {
+            fn from(err: $error_type) -> Self {
+                $parent::$variant(err)
+            }
+        }
+    };
+    ({ $($error_type:ty => $variant:ident),* } for $parent:ident) => {
+        $(
+            impl_from_err!($error_type => $variant for $parent);
+        )*
+    };
+    ({ $($error_type:ty => $variant:ident),*, } for $parent:ident) => {
+        $(
+            impl_from_err!($error_type => $variant for $parent);
+        )*
+    };
+}
+
 #[derive(Debug)]
 /// An error type for file writes
 pub enum FileWriteError {
@@ -16,7 +36,7 @@ pub enum FileWriteError {
     JoinError(tokio::task::JoinError),
     NotEnoughWriters,
     ReaderError(io::Error),
-    WriterError(ShardWriterError),
+    WriterError(ShardError),
 }
 
 impl Display for FileWriteError {
@@ -34,56 +54,41 @@ impl Display for FileWriteError {
 
 impl Error for FileWriteError {}
 
-impl From<reed_solomon_erasure::Error> for FileWriteError {
-    fn from(err: reed_solomon_erasure::Error) -> Self {
-        FileWriteError::Erasure(err)
-    }
-}
-
-impl From<tokio::task::JoinError> for FileWriteError {
-    fn from(err: tokio::task::JoinError) -> Self {
-        FileWriteError::JoinError(err)
-    }
-}
-
-impl From<io::Error> for FileWriteError {
-    fn from(err: io::Error) -> Self {
-        FileWriteError::ReaderError(err)
-    }
-}
-
-impl From<ShardWriterError> for FileWriteError {
-    fn from(err: ShardWriterError) -> Self {
-        FileWriteError::WriterError(err)
-    }
+impl_from_err!{
+    {
+        reed_solomon_erasure::Error => Erasure,
+        tokio::task::JoinError => JoinError,
+        io::Error => ReaderError,
+        ShardError => WriterError,
+    } for FileWriteError
 }
 
 #[derive(Debug)]
 /// When writing a shard, the location of the failure should also be known
-pub struct ShardWriterError {
+pub struct ShardError {
     pub location: Location,
-    pub error: LocationWriteError,
+    pub error: LocationError,
 }
 
-impl Display for ShardWriterError {
+impl Display for ShardError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "<{}> {}", self.location, self.error)
     }
 }
 
-impl Error for ShardWriterError {}
+impl Error for ShardError {}
 
 #[derive(Debug)]
-/// Different types of location write errors
-pub enum LocationWriteError {
+/// Different types of location errors
+pub enum LocationError {
     IoError(io::Error),
     HttpStatus(reqwest::StatusCode),
     HttpError(reqwest::Error),
 }
 
-impl Display for LocationWriteError {
+impl Display for LocationError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        use LocationWriteError::*;
+        use LocationError::*;
         match self {
             IoError(e) => write!(f, "IO: {}", e),
             HttpStatus(status) => write!(f, "Http Status: {}", status),
@@ -92,23 +97,117 @@ impl Display for LocationWriteError {
     }
 }
 
-impl Error for LocationWriteError {}
+impl Error for LocationError {}
 
-impl From<reqwest::Error> for LocationWriteError {
+impl From<reqwest::Error> for LocationError {
     fn from(err: reqwest::Error) -> Self {
         match err.status() {
             Some(status) if !status.is_success() => {
-                LocationWriteError::HttpStatus(status)
+                LocationError::HttpStatus(status)
             },
             _ => {
-                LocationWriteError::HttpError(err)
+                LocationError::HttpError(err)
             }
         }
     }
 }
 
-impl From<io::Error> for LocationWriteError {
-    fn from(err: io::Error) -> Self {
-        LocationWriteError::IoError(err)
+impl_from_err!{
+    {
+        io::Error => IoError,
+        reqwest::StatusCode => HttpStatus,
+    } for LocationError
+}
+
+#[derive(Debug)]
+pub enum FileReadError {
+    Erasure(reed_solomon_erasure::Error),
+    FilePart(ShardError),
+    WriterError(io::Error),
+}
+
+impl_from_err!{
+    {
+        reed_solomon_erasure::Error => Erasure,
+        ShardError => FilePart,
+        io::Error => WriterError,
+    } for FileReadError
+}
+
+#[derive(Debug)]
+pub enum ClusterError {
+    FileWrite(FileWriteError),
+    FileMetadataRead(MetadataReadError),
+    FileRead(FileReadError),
+}
+
+impl_from_err!{
+    {
+        FileWriteError => FileWrite,
+        MetadataReadError => FileMetadataRead,
+        FileReadError => FileRead,
+    } for ClusterError
+}
+
+#[derive(Debug)]
+pub enum SerdeError {
+    Json(serde_json::Error),
+    Yaml(serde_yaml::Error),
+}
+
+impl Display for SerdeError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use SerdeError::*;
+        match self {
+            Json(e) => write!(f, "Json: {}", e),
+            Yaml(e) => write!(f, "Yaml: {}", e),
+        }
     }
 }
+
+impl std::error::Error for SerdeError {}
+
+impl_from_err!{
+    {
+        serde_json::Error => Json,
+        serde_yaml::Error => Yaml,
+    } for SerdeError
+}
+
+#[derive(Debug)]
+pub enum MetadataReadError {
+    PostExec(io::Error),
+    FileRead(LocationError),
+    Serde(SerdeError),
+}
+
+impl_from_err!{
+    {
+        LocationError => FileRead,
+        SerdeError => Serde,
+    } for MetadataReadError
+}
+
+#[derive(Debug)]
+pub enum HttpUrlError {
+    Parse(url::ParseError),
+    NotHttp,
+}
+
+impl_from_err!{
+    {
+        url::ParseError => Parse,
+    } for HttpUrlError
+}
+
+impl Display for HttpUrlError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use HttpUrlError::*;
+        match self {
+            Parse(e) => write!(f, "Parse: {}", e),
+            NotHttp => write!(f, "Not HTTP"),
+        }
+    }
+}
+
+impl Error for HttpUrlError {}

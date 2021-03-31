@@ -49,9 +49,9 @@ use tokio::{
 use crate::{
     file::{
         hash::*,
+        error::*,
         *,
     },
-    Error,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,7 +66,7 @@ pub struct FilePart {
 }
 
 impl FilePart {
-    pub(crate) async fn read(&self) -> Result<Vec<u8>, Error> {
+    pub(crate) async fn read(&self) -> Result<Vec<u8>, FileReadError> {
         let r: ReedSolomon<galois_8::Field> = ReedSolomon::new(self.data.len(), self.parity.len())?;
         let all_chunks_owned = self
             .data
@@ -91,7 +91,7 @@ impl FilePart {
                         let (index, mut chunk) = all_chunks.remove(sample);
                         drop(all_chunks);
                         for location in chunk.locations.drain(..) {
-                            if let Some(data) = location.read().await {
+                            if let Ok(data) = location.read().await {
                                 let (data, hash) = Sha256Hash::from_vec_async(data).await;
                                 if hash == chunk.sha256 {
                                     return Some((index, data));
@@ -135,14 +135,17 @@ impl FilePart {
             let ref hash = hash_with_location.sha256;
             for location in hash_with_location.locations.iter() {
                 let integrity: Integrity = {
-                    if let Some(data) = location.read().await {
-                        if hash.verify(data).await.1 {
-                            Integrity::Valid
-                        } else {
-                            Integrity::Invalid
-                        }
-                    } else {
-                        Integrity::Unavailable
+                    match location.read().await {
+                        Ok(data) => {
+                            if hash.verify(data).await.1 {
+                                Integrity::Valid
+                            } else {
+                                Integrity::Invalid
+                            }
+                        },
+                        Err(_err) => {
+                            Integrity::Unavailable
+                        },
                     }
                 };
                 out.insert(location, integrity);

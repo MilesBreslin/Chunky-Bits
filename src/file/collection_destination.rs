@@ -24,7 +24,6 @@ use crate::{
         *,
         error::*,
     },
-    Error,
 };
 
 pub trait CollectionDestination {
@@ -53,7 +52,7 @@ impl CollectionDestination for Vec<WeightedLocation> {
 
 #[async_trait]
 pub trait ShardWriter {
-    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardWriterError>;
+    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
