@@ -46,6 +46,7 @@ use tokio::{
 use crate::{
     file::{
         hash::*,
+        error::*,
         *,
     },
     Error,
@@ -69,7 +70,7 @@ impl FileReference {
         data: usize,
         parity: usize,
         concurrency: NonZeroUsize,
-    ) -> Result<Self, Error>
+    ) -> Result<Self, FileWriteError>
     where
         R: AsyncRead + Unpin,
         D: CollectionDestination + Send + Sync + 'static,
@@ -77,7 +78,7 @@ impl FileReference {
         let mut concurrent_parts: usize = concurrency.into();
         // For each read of the channel, 1 part is allowed to start writing
         // Each part on completion will write a result to it
-        let (err_sender, mut err_receiver) = mpsc::channel::<Result<(), Error>>(concurrent_parts);
+        let (err_sender, mut err_receiver) = mpsc::channel::<Result<(), FileWriteError>>(concurrent_parts);
 
         // A vec of task join handles that will be read at the end
         // Errors will be reported both here and via the channel
@@ -87,7 +88,7 @@ impl FileReference {
             Arc::new(ReedSolomon::new(data, parity).unwrap());
         let mut done = false;
         let mut total_bytes: u64 = 0;
-        let mut write_error: Result<(), Error> = Ok(());
+        let mut write_error: Result<(), FileWriteError> = Ok(());
         'file: while !done {
             // Wait to be allowed to read/write a part
             if concurrent_parts == 0 {
@@ -202,7 +203,7 @@ impl FileReference {
                     };
                     // Send the error to the error channel
                     // Return option of value
-                    let result: Result<_, Error> = result.await;
+                    let result: Result<_, FileWriteError> = result.await;
                     match result {
                         Ok(value) => {
                             let _result = err_sender.send(Ok(())).await;

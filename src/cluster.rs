@@ -42,6 +42,7 @@ use crate::{
         Location,
         ShardWriter,
         WeightedLocation,
+        error::*,
     },
     Error,
 };
@@ -64,7 +65,7 @@ impl Cluster {
         reader: &mut R,
         profile: &ClusterProfile,
         content_type: Option<String>,
-    ) -> Result<(), Error>
+    ) -> Result<(), FileWriteError>
     where
         R: AsyncRead + Unpin,
     {
@@ -79,7 +80,7 @@ impl Cluster {
         )
         .await?;
         file_ref.content_type = content_type;
-        self.metadata.write(&filename, &file_ref).await?;
+        self.metadata.write(&filename, &file_ref).await.unwrap();
         Ok(())
     }
 
@@ -386,10 +387,9 @@ impl AsRef<ClusterProfile> for ClusterNodesWithProfile {
 }
 
 impl CollectionDestination for ClusterNodesWithProfile {
-    type Error = Infallible;
     type Writer = ClusterWriter;
 
-    fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, Self::Error> {
+    fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError> {
         let writer = ClusterWriter {
             state: Arc::new(ClusterWriterState {
                 parent: self.clone(),
@@ -404,6 +404,7 @@ impl CollectionDestination for ClusterNodesWithProfile {
                     zone_status: <Self as AsRef<ClusterProfile>>::as_ref(self)
                         .zone_rules
                         .clone(),
+                    errors: vec![],
                 }),
             }),
         };
@@ -419,19 +420,21 @@ struct ClusterWriterInnerState {
     available_indexes: HashMap<usize, usize>,
     failed_indexes: HashSet<usize>,
     zone_status: ZoneRules,
+    errors: Vec<ShardWriterError>,
 }
 
 impl ClusterWriterState {
-    async fn next_writer(&self) -> Option<(usize, &ClusterNode)> {
+    async fn next_writer(&self) -> Result<(usize, &ClusterNode), ShardWriterError> {
         let (nodes, _profile) = self.parent.0.as_ref();
         let mut state = self.inner_state.lock().await;
         let ClusterWriterInnerState {
             ref mut available_indexes,
             ref failed_indexes,
             zone_status: ZoneRules(ref mut zone_status),
+            ref mut errors,
         } = *state;
         if available_indexes.len() == 0 {
-            return None;
+            return Err(errors.pop().unwrap());
         }
         let required_zones = zone_status
             .iter()
@@ -502,7 +505,7 @@ impl ClusterWriterState {
             .map(|(_, node)| node.location.weight)
             .sum();
         if total_weight == 0 {
-            return None;
+            return Err(errors.pop().unwrap());
         }
         let sample = rand::thread_rng().gen_range(1..(total_weight + 1));
         let mut current_weight: usize = 0;
@@ -520,16 +523,17 @@ impl ClusterWriterState {
                         }
                     }
                 }
-                return Some((*index, node));
+                return Ok((*index, node));
             }
         }
-        None
+        Err(errors.pop().unwrap())
     }
 
-    async fn invalidate_index(&self, index: usize) -> () {
+    async fn invalidate_index(&self, index: usize, err: ShardWriterError) -> () {
         let (nodes, _profile) = self.parent.0.as_ref();
         let mut state = self.inner_state.lock().await;
         state.failed_indexes.insert(index);
+        state.errors.push(err);
         if let Some(node) = nodes.0.get(index) {
             for zone in node.zones.iter() {
                 if let Some(ZoneRule {
@@ -557,19 +561,22 @@ struct ClusterWriter {
 
 #[async_trait]
 impl ShardWriter for ClusterWriter {
-    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, Error> {
+    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardWriterError> {
         loop {
             match self.state.as_ref().next_writer().await {
-                Some((index, node)) => {
+                Ok((index, node)) => {
                     let writer = &node.location.location;
-                    if let Ok(loc) = writer.write_subfile(hash, bytes).await {
-                        return Ok(vec![loc]);
-                    } else {
-                        self.state.invalidate_index(index).await;
+                    match writer.write_subfile(hash, bytes).await {
+                        Ok(loc) => {
+                            return Ok(vec![loc]);
+                        },
+                        Err(err) => {
+                            self.state.invalidate_index(index, err).await;
+                        },
                     }
                 },
-                None => {
-                    return Err(Error::NotEnoughWriters);
+                Err(err) => {
+                    return Err(err);
                 },
             }
         }

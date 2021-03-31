@@ -38,7 +38,10 @@ use tokio::{
 use url::Url;
 
 use crate::{
-    file::*,
+    file::{
+        *,
+        error::*,
+    },
     Error,
 };
 
@@ -60,24 +63,42 @@ impl Location {
         }
     }
 
-    pub(crate) async fn write_subfile(&self, name: &str, bytes: &[u8]) -> Result<Location, Error> {
+    pub(crate) async fn write_subfile(&self, name: &str, bytes: &[u8]) -> Result<Location, ShardWriterError> {
         use Location::*;
         match self {
             Http(url) => {
                 let mut target_url: Url = url.clone().into();
                 target_url.path_segments_mut().unwrap().push(name);
-                reqwest::Client::new()
+                let result = reqwest::Client::new()
                     .put(target_url.clone())
                     .body(bytes.to_owned())
                     .send()
-                    .await?;
-                Ok(Http(HttpUrl(target_url)))
+                    .await;
+                let location = Http(HttpUrl(target_url));
+                match result {
+                    Ok(loc) => Ok(location),
+                    Err(err) => Err(ShardWriterError {
+                        location: location,
+                        error: err.into(),
+                    }),
+                }
             },
             Local(path) => {
                 let mut target_path = path.clone();
                 target_path.push(name);
-                File::create(&target_path).await?.write_all(bytes).await?;
-                Ok(Local(target_path))
+                let result = File::create(&target_path)
+                    .then(|res| async move {
+                        res?.write_all(bytes).await
+                    })
+                    .await;
+                let location = Local(target_path);
+                match result {
+                    Ok(loc) => Ok(location),
+                    Err(err) => Err(ShardWriterError {
+                        location: location,
+                        error: err.into(),
+                    }),
+                }
             },
         }
     }
@@ -91,7 +112,7 @@ impl fmt::Display for Location {
 
 #[async_trait]
 impl ShardWriter for Location {
-    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, Error> {
+    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardWriterError> {
         self.write_subfile(hash, bytes)
             .await
             .map(|location| vec![location])
