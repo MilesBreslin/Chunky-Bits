@@ -5,7 +5,7 @@ use serde::{
     Serialize,
 };
 
-use crate::file::*;
+use crate::file::Location;
 
 #[derive(Clone, PartialOrd, Ord, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WeightedLocation {

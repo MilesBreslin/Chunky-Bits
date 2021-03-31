@@ -26,9 +26,11 @@ use tokio::{
 };
 
 use crate::file::{
-    error::*,
-    hash::*,
-    *,
+    error::FileReadError,
+    hash::Sha256Hash,
+    Encryption,
+    HashWithLocation,
+    Location,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

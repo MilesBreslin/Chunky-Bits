@@ -6,9 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::{
-    future::FutureExt,
-};
+use futures::future::FutureExt;
 use serde::{
     Deserialize,
     Serialize,
@@ -23,8 +21,12 @@ use tokio::{
 use url::Url;
 
 use crate::file::{
-    error::*,
-    *,
+    error::{
+        HttpUrlError,
+        LocationError,
+        ShardError,
+    },
+    ShardWriter,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

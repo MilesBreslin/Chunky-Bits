@@ -6,8 +6,12 @@ use serde::{
 };
 
 use crate::file::{
-    error::*,
-    *,
+    error::{
+        FileWriteError,
+        ShardError,
+    },
+    Location,
+    WeightedLocation,
 };
 
 pub trait CollectionDestination {
