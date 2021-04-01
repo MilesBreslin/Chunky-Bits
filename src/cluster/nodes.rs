@@ -28,7 +28,7 @@ use crate::{
 pub struct ClusterNodes(pub Vec<ClusterNode>);
 
 impl ClusterNodes {
-    pub(crate) fn with_profile(self, profile: ClusterProfile) -> ClusterNodesWithProfile {
+    pub(super) fn with_profile(self, profile: ClusterProfile) -> ClusterNodesWithProfile {
         ClusterNodesWithProfile(Arc::new((self, profile)))
     }
 }
@@ -105,7 +105,7 @@ impl PartialOrd for ClusterNode {
 }
 
 #[derive(Clone)]
-pub(crate) struct ClusterNodesWithProfile(pub Arc<(ClusterNodes, ClusterProfile)>);
+pub(super) struct ClusterNodesWithProfile(pub Arc<(ClusterNodes, ClusterProfile)>);
 
 impl AsRef<ClusterNodes> for ClusterNodesWithProfile {
     fn as_ref(&self) -> &ClusterNodes {
