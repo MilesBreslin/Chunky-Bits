@@ -1,5 +1,9 @@
 use std::{
-    convert::Infallible,
+    fmt::{
+        self,
+        Display,
+        Formatter,
+    },
     num::NonZeroUsize,
     path::PathBuf,
     sync::Arc,
@@ -12,8 +16,8 @@ use chunky_bits::{
         DataChunkCount,
         ParityChunkCount,
     },
-    file,
     file::{
+        self,
         FileReference,
         WeightedLocation,
     },
@@ -38,7 +42,6 @@ use tokio::{
         AsyncWrite,
         AsyncWriteExt,
     },
-    task,
 };
 use tokio_util::codec::{
     BytesCodec,
@@ -150,70 +153,26 @@ pub enum Command {
 }
 
 #[derive(Debug)]
-pub enum Error {
-    Io(io::Error),
-    JoinError(task::JoinError),
-    Erasure(reed_solomon_erasure::Error),
-    Reqwest(reqwest::Error),
-    HttpStatus(reqwest::StatusCode),
-    ExpiredWriter,
-    NotEnoughWriters,
-    UnknownError,
-    Unimplemented,
-    NotHttp,
-    UrlParseError(url::ParseError),
-    Json(serde_json::Error),
-    Yaml(serde_yaml::Error),
-}
-
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Self {
-        Error::Io(e)
+struct ErrorMessage(String);
+impl ErrorMessage {
+    fn with_prefix<T>(prefix: &'static str) -> impl Fn(T) -> ErrorMessage
+    where
+        T: std::fmt::Display,
+    {
+        move |msg| ErrorMessage(format!("{}: {}", prefix, msg))
     }
 }
-impl From<task::JoinError> for Error {
-    fn from(e: task::JoinError) -> Self {
-        Error::JoinError(e)
+impl<T: AsRef<str>> From<T> for ErrorMessage {
+    fn from(msg: T) -> Self {
+        ErrorMessage(format!("{}", msg.as_ref()))
     }
 }
-impl From<reed_solomon_erasure::Error> for Error {
-    fn from(e: reed_solomon_erasure::Error) -> Self {
-        Error::Erasure(e)
+impl Display for ErrorMessage {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
-impl From<reqwest::Error> for Error {
-    fn from(e: reqwest::Error) -> Self {
-        Error::Reqwest(e)
-    }
-}
-impl From<url::ParseError> for Error {
-    fn from(e: url::ParseError) -> Self {
-        Error::UrlParseError(e)
-    }
-}
-impl From<serde_json::Error> for Error {
-    fn from(e: serde_json::Error) -> Self {
-        Error::Json(e)
-    }
-}
-impl From<serde_yaml::Error> for Error {
-    fn from(e: serde_yaml::Error) -> Self {
-        Error::Yaml(e)
-    }
-}
-impl From<Infallible> for Error {
-    fn from(_: Infallible) -> Self {
-        panic!("Infallible")
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl std::error::Error for Error {}
+impl std::error::Error for ErrorMessage {}
 
 macro_rules! warp_headers {
     ($resp:expr => { $header_name:literal => $header_value:expr }) => {
@@ -312,6 +271,16 @@ async fn index_put(
 
 #[tokio::main]
 async fn main() {
+    match run().await {
+        Ok(_) => {},
+        Err(err) => {
+            eprintln!("{}", err);
+            std::process::exit(1);
+        },
+    }
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let Opt { command } = Opt::from_args();
     match command {
         Command::HttpGateway {
@@ -321,7 +290,7 @@ async fn main() {
         } => {
             use warp::Filter;
             let cluster: Arc<Cluster> =
-                Arc::new(serde_yaml::from_reader(std::fs::File::open(&cluster).unwrap()).unwrap());
+                Arc::new(serde_yaml::from_reader(std::fs::File::open(&cluster)?)?);
             let cluster_get = cluster.clone();
             let route_get = warp::get()
                 .or(warp::head())
@@ -346,12 +315,16 @@ async fn main() {
             filename,
             profile,
         } => {
-            let cluster: Cluster =
-                serde_yaml::from_reader(std::fs::File::open(&cluster).unwrap()).unwrap();
-            let mut f = File::open(&file).await.unwrap();
+            let cluster: Cluster = serde_yaml::from_reader(
+                std::fs::File::open(&cluster)
+                    .map_err(ErrorMessage::with_prefix("Cluster Definition"))?,
+            )?;
+            let mut f = File::open(&file)
+                .await
+                .map_err(ErrorMessage::with_prefix("Target File"))?;
             let cluster_profile = cluster
                 .get_profile(profile.as_ref().map(|s| s.as_str()))
-                .unwrap();
+                .ok_or(ErrorMessage::from("Profile not found"))?;
             let output_name = match filename {
                 Some(filename) => filename,
                 None => file,
@@ -363,13 +336,11 @@ async fn main() {
                     cluster_profile,
                     None,
                 )
-                .await
-                .unwrap();
+                .await?;
         },
         Command::ClusterInfo { cluster } => {
-            let cluster: Cluster =
-                serde_yaml::from_reader(std::fs::File::open(&cluster).unwrap()).unwrap();
-            println!("{}", serde_yaml::to_string(&cluster).unwrap());
+            let cluster: Cluster = serde_yaml::from_reader(std::fs::File::open(&cluster)?)?;
+            println!("{}", serde_yaml::to_string(&cluster)?);
         },
         Command::EncodeFile {
             file,
@@ -385,7 +356,7 @@ async fn main() {
             if destination.len() < (data + parity) {
                 eprintln!("Warning: Not enough destinations to distribute the data evenly");
             }
-            let mut f = File::open(&file).await.unwrap();
+            let mut f = File::open(&file).await?;
             let writer = Arc::new(destination);
             let file_ref = file::FileReference::from_reader(
                 &mut f,
@@ -395,9 +366,8 @@ async fn main() {
                 parity,
                 concurrency,
             )
-            .await
-            .unwrap();
-            println!("{}", serde_yaml::to_string(&file_ref).unwrap());
+            .await?;
+            println!("{}", serde_yaml::to_string(&file_ref)?);
         },
         Command::DecodeShards {
             data,
@@ -413,14 +383,14 @@ async fn main() {
                 .collect::<FuturesOrdered<_>>()
                 .collect::<Vec<Option<Vec<u8>>>>()
                 .await;
-            let r: ReedSolomon<galois_8::Field> = ReedSolomon::new(data, parity).unwrap();
-            r.reconstruct(&mut shard_bufs).unwrap();
+            let r: ReedSolomon<galois_8::Field> = ReedSolomon::new(data, parity)?;
+            r.reconstruct(&mut shard_bufs)?;
             let mut f: Box<dyn AsyncWrite + Unpin> = match destination.to_str() {
                 Some("-") => Box::new(io::stdout()),
-                _ => Box::new(File::create(destination).await.unwrap()),
+                _ => Box::new(File::create(destination).await?),
             };
             for buf in shard_bufs.drain(..).take(data).filter_map(|op| op) {
-                f.write_all(&buf).await.unwrap()
+                f.write_all(&buf).await?;
             }
         },
         Command::DecodeFile {
@@ -428,21 +398,18 @@ async fn main() {
             destination,
         } => {
             let file_reference: FileReference =
-                serde_yaml::from_reader(&std::fs::File::open(file_reference).unwrap()).unwrap();
-            let mut f_dest = File::create(destination).await.unwrap();
-            file_reference.to_writer(&mut f_dest).await.unwrap();
+                serde_yaml::from_reader(&std::fs::File::open(file_reference)?)?;
+            let mut f_dest = File::create(destination).await?;
+            file_reference.to_writer(&mut f_dest).await?;
         },
         Command::VerifyFile { file } => {
             let file_reference: FileReference =
-                serde_yaml::from_reader(&std::fs::File::open(file).unwrap()).unwrap();
-            println!(
-                "{}",
-                serde_yaml::to_string(&file_reference.verify().await).unwrap(),
-            );
+                serde_yaml::from_reader(&std::fs::File::open(file)?)?;
+            println!("{}", serde_yaml::to_string(&file_reference.verify().await)?,);
         },
         Command::GetHashes { file } => {
             let file_reference: FileReference =
-                serde_yaml::from_reader(&std::fs::File::open(file).unwrap()).unwrap();
+                serde_yaml::from_reader(&std::fs::File::open(file)?)?;
             for part in &file_reference.parts {
                 for location_with_hash in part.data.iter().chain(part.parity.iter()) {
                     println!("{}", location_with_hash.sha256);
@@ -450,4 +417,5 @@ async fn main() {
             }
         },
     }
+    Ok(())
 }

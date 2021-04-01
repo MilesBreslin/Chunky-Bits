@@ -123,6 +123,17 @@ pub enum FileReadError {
     WriterError(io::Error),
 }
 
+impl Display for FileReadError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use FileReadError::*;
+        match self {
+            Erasure(e) => write!(f, "Erasure: {}", e),
+            FilePart(e) => write!(f, "FilePart: {}", e),
+            WriterError(e) => write!(f, "WriterError: {}", e),
+        }
+    }
+}
+
 impl_from_err! {
     {
         reed_solomon_erasure::Error => Erasure,
@@ -131,12 +142,27 @@ impl_from_err! {
     } for FileReadError
 }
 
+impl Error for FileReadError {}
+
 #[derive(Debug)]
 pub enum ClusterError {
     FileWrite(FileWriteError),
     FileMetadataRead(MetadataReadError),
     FileRead(FileReadError),
 }
+
+impl Display for ClusterError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use ClusterError::*;
+        match self {
+            FileWrite(e) => write!(f, "FileWrite: {}", e),
+            FileMetadataRead(e) => write!(f, "FileMetadataRead: {:?}", e),
+            FileRead(e) => write!(f, "FileRead: {}", e),
+        }
+    }
+}
+
+impl Error for ClusterError {}
 
 impl_from_err! {
     {
