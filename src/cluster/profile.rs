@@ -8,7 +8,11 @@ use serde::{
     Serialize,
 };
 
-use crate::cluster::*;
+use crate::cluster::{
+    ChunkSize,
+    DataChunkCount,
+    ParityChunkCount,
+};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ClusterProfiles {
