@@ -21,10 +21,13 @@ use chunky_bits::{
         FileReference,
         WeightedLocation,
     },
+    http::{
+        cluster_filter,
+        cluster_filter_get,
+    },
 };
 use futures::stream::{
     FuturesOrdered,
-    Stream,
     StreamExt,
 };
 use reed_solomon_erasure::{
@@ -42,18 +45,6 @@ use tokio::{
         AsyncWrite,
         AsyncWriteExt,
     },
-};
-use tokio_util::codec::{
-    BytesCodec,
-    FramedRead,
-};
-use warp::{
-    http::{
-        header::HeaderValue,
-        response::Response,
-        StatusCode,
-    },
-    hyper::body::Body,
 };
 
 #[derive(StructOpt)]
@@ -174,101 +165,6 @@ impl Display for ErrorMessage {
 }
 impl std::error::Error for ErrorMessage {}
 
-macro_rules! warp_headers {
-    ($resp:expr => { $header_name:literal => $header_value:expr }) => {
-        Box::new(warp::reply::with_header(
-            $resp,
-            $header_name,
-            $header_value,
-        ))
-    };
-    ($resp:expr => { $header_name:literal => $header_value:expr, }) => {
-        warp_headers!($resp => { $header_name => $header_value })
-    };
-    ($resp:expr => {
-        $header_name:literal => $header_value:expr,
-        $($header_names:literal => $header_values:expr),*
-    }) => {
-        warp_headers!(
-            warp_headers!($resp => {
-                $header_name => $header_value
-            }) => {
-            $($header_names => $header_values),*
-        })
-    };
-    ($resp:expr => {
-        $($header_names:literal => $header_values:expr),*,
-    }) => {
-        warp_headers!(
-            $resp => {
-                $($header_names => $header_values),*
-            }
-        )
-    };
-}
-
-async fn index_get(
-    cluster: Arc<Cluster>,
-    path: warp::path::FullPath,
-) -> Result<Box<dyn warp::Reply>, std::convert::Infallible> {
-    if let Ok(file_ref) = cluster.get_file_ref(path.as_str()).await {
-        let length = file_ref.length.clone();
-        let content_type = file_ref.content_type.clone();
-        let (reader, mut writer) = tokio::io::duplex(1 << 24);
-        tokio::spawn(async move { file_ref.to_writer(&mut writer).await });
-        let stream = FramedRead::new(reader, BytesCodec::new());
-        let base_resp =
-            warp::reply::with_status(Response::new(Body::wrap_stream(stream)), StatusCode::OK);
-        return Ok(match (length, content_type) {
-            (Some(length), Some(content_type)) => {
-                warp_headers!(base_resp => {
-                    "Content-Length" => length,
-                    "Content-Type" => content_type,
-                })
-            },
-            (Some(length), None) => {
-                warp_headers!(base_resp => {
-                    "Content-Length" => length,
-                })
-            },
-            (None, Some(content_type)) => {
-                warp_headers!(base_resp => {
-                    "Content-Type" => content_type,
-                })
-            },
-            (None, None) => Box::new(base_resp),
-        });
-    }
-    return Ok(Box::new(warp::reply::with_status(
-        Vec::<u8>::new(),
-        StatusCode::NOT_FOUND,
-    )));
-}
-
-async fn index_put(
-    cluster: Arc<Cluster>,
-    path: warp::path::FullPath,
-    content_type: HeaderValue,
-    body: impl Stream<Item = Result<impl bytes::buf::Buf, warp::Error>> + Unpin,
-) -> Result<impl warp::Reply, std::convert::Infallible> {
-    let profile = cluster.get_profile(None).unwrap();
-    let write = cluster
-        .write_file(
-            path.as_str(),
-            &mut tokio_util::io::StreamReader::new(
-                body.map(|res| -> io::Result<_> { Ok(res.unwrap()) }),
-            ),
-            profile,
-            content_type.to_str().ok().map(str::to_string),
-        )
-        .await;
-    if let Ok(_) = write {
-        Ok(warp::http::StatusCode::OK)
-    } else {
-        Ok(warp::http::StatusCode::INTERNAL_SERVER_ERROR)
-    }
-}
-
 #[tokio::main]
 async fn main() {
     match run().await {
@@ -288,25 +184,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             listen_addr,
             read_only,
         } => {
-            use warp::Filter;
-            let cluster: Arc<Cluster> =
-                Arc::new(serde_yaml::from_reader(std::fs::File::open(&cluster)?)?);
-            let cluster_get = cluster.clone();
-            let route_get = warp::get()
-                .or(warp::head())
-                .map(move |_| cluster_get.clone())
-                .and(warp::path::full())
-                .and_then(index_get);
-            let route_put = warp::put()
-                .map(move || cluster.clone())
-                .and(warp::path::full())
-                .and(warp::header::value("content-type"))
-                .and(warp::body::stream())
-                .and_then(index_put);
+            let cluster: Cluster = serde_yaml::from_reader(
+                std::fs::File::open(&cluster)
+                    .map_err(ErrorMessage::with_prefix("Cluster Definition"))?,
+            )?;
             if read_only {
-                warp::serve(route_get).run(listen_addr).await;
+                warp::serve(cluster_filter_get(cluster)).bind(listen_addr).await;
             } else {
-                warp::serve(route_get.or(route_put)).run(listen_addr).await;
+                warp::serve(cluster_filter(cluster)).bind(listen_addr).await;
             }
         },
         Command::Put {
