@@ -172,6 +172,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "structopt",
+ "tempfile",
  "tokio",
  "tokio-util",
  "url",

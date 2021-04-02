@@ -26,3 +26,6 @@ tokio = { version = "1", features = [ "fs", "io-std", "io-util", "macros", "proc
 tokio-util = "0.6"
 url = { version = "2.2", features = [ "serde" ] }
 warp = { version = "0.3" }
+
+[dev-dependencies]
+tempfile = "3.2"
