@@ -8,7 +8,7 @@ use serde::{
     Serialize,
 };
 
-use crate::cluster::{
+use crate::cluster::sized_int::{
     ChunkSize,
     DataChunkCount,
     ParityChunkCount,

@@ -13,5 +13,4 @@ pub use nodes::*;
 mod writer;
 pub use writer::*;
 
-mod sized_int;
-pub use sized_int::*;
+pub mod sized_int;
