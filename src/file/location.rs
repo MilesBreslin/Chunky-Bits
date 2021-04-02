@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::file::{
     error::{
-        HttpUrlError,
+        LocationParseError,
         LocationError,
         ShardError,
     },
@@ -119,11 +119,18 @@ impl ShardWriter for Location {
 }
 
 impl FromStr for Location {
-    type Err = HttpUrlError;
+    type Err = LocationParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("http://") || s.starts_with("https://") {
             return Ok(Location::Http(HttpUrl::from_str(s)?));
+        }
+        if s.starts_with("file://") {
+            return Ok(Location::Local(
+                Url::parse(s)?
+                    .to_file_path()
+                    .map_err(|_| LocationParseError::FilePathNotAbsolute)?
+            ));
         }
         Ok(Location::Local(FromStr::from_str(s).unwrap()))
     }
@@ -141,7 +148,7 @@ pub struct HashWithLocation<T: Serialize + Clone + PartialEq + Eq + Hash + Parti
 pub struct HttpUrl(Url);
 
 impl FromStr for HttpUrl {
-    type Err = HttpUrlError;
+    type Err = LocationParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self::try_from(Url::from_str(s)?)?)
@@ -155,12 +162,12 @@ impl Into<Url> for HttpUrl {
 }
 
 impl TryFrom<Url> for HttpUrl {
-    type Error = HttpUrlError;
+    type Error = LocationParseError;
 
     fn try_from(u: Url) -> Result<Self, Self::Error> {
         match u.scheme() {
             "http" | "https" => Ok(Self(u)),
-            _ => Err(HttpUrlError::NotHttp),
+            _ => Err(LocationParseError::NotHttp),
         }
     }
 }
@@ -168,14 +175,14 @@ impl TryFrom<Url> for HttpUrl {
 macro_rules! impl_try_from_string {
     ($type:ty) => {
         impl TryFrom<$type> for HttpUrl {
-            type Error = HttpUrlError;
+            type Error = LocationParseError;
 
             fn try_from(s: $type) -> Result<Self, Self::Error> {
                 FromStr::from_str(AsRef::<str>::as_ref(&s))
             }
         }
         impl TryFrom<$type> for Location {
-            type Error = HttpUrlError;
+            type Error = LocationParseError;
 
             fn try_from(s: $type) -> Result<Self, Self::Error> {
                 FromStr::from_str(AsRef::<str>::as_ref(&s))

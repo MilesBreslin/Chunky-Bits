@@ -208,14 +208,14 @@ impl_from_err! {
 #[derive(Debug)]
 pub enum MetadataReadError {
     FileRead(LocationError),
-    InvalidLocation(HttpUrlError),
+    InvalidLocation(LocationParseError),
     PostExec(io::Error),
     Serde(SerdeError),
 }
 
 impl_from_err! {
     {
-        HttpUrlError => InvalidLocation,
+        LocationParseError => InvalidLocation,
         LocationError => FileRead,
         SerdeError => Serde,
     } for MetadataReadError
@@ -234,25 +234,27 @@ impl Display for MetadataReadError {
 }
 
 #[derive(Debug)]
-pub enum HttpUrlError {
+pub enum LocationParseError {
     Parse(url::ParseError),
     NotHttp,
+    FilePathNotAbsolute,
 }
 
 impl_from_err! {
     {
         url::ParseError => Parse,
-    } for HttpUrlError
+    } for LocationParseError
 }
 
-impl Display for HttpUrlError {
+impl Display for LocationParseError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        use HttpUrlError::*;
+        use LocationParseError::*;
         match self {
             Parse(e) => write!(f, "Parse: {}", e),
             NotHttp => write!(f, "Not HTTP"),
+            FilePathNotAbsolute => write!(f, "File path not absolute"),
         }
     }
 }
 
-impl Error for HttpUrlError {}
+impl Error for LocationParseError {}

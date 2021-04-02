@@ -22,7 +22,7 @@ use crate::{
         self,
         error::{
             ClusterError,
-            HttpUrlError,
+            LocationParseError,
             MetadataReadError,
         },
         CollectionDestination,
@@ -44,7 +44,7 @@ pub struct Cluster {
 
 impl Cluster {
     pub async fn from_location(
-        location: impl TryInto<Location, Error = impl Into<HttpUrlError>>,
+        location: impl TryInto<Location, Error = impl Into<LocationParseError>>,
     ) -> Result<Cluster, MetadataReadError> {
         MetadataFormat::Yaml.from_location(location).await
     }

@@ -15,7 +15,7 @@ use tokio::{
 
 use crate::file::{
     error::{
-        HttpUrlError,
+        LocationParseError,
         LocationError,
         MetadataReadError,
         SerdeError,
@@ -147,7 +147,7 @@ impl MetadataFormat {
 
     pub async fn from_location<T>(
         &self,
-        location: impl TryInto<Location, Error = impl Into<HttpUrlError>>,
+        location: impl TryInto<Location, Error = impl Into<LocationParseError>>,
     ) -> Result<T, MetadataReadError>
     where
         T: DeserializeOwned,
