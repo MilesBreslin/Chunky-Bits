@@ -13,14 +13,14 @@ use tokio::{
     process::Command,
 };
 
-use crate::file::{
+use crate::{
     error::{
         LocationError,
         LocationParseError,
         MetadataReadError,
         SerdeError,
     },
-    Location,
+    file::Location,
 };
 
 #[derive(Clone, Serialize, Deserialize)]

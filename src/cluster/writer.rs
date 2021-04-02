@@ -20,8 +20,8 @@ use crate::{
         ZoneRule,
         ZoneRules,
     },
+    error::ShardError,
     file::{
-        error::ShardError,
         Location,
         ShardWriter,
     },

@@ -25,12 +25,14 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::file::{
+use crate::{
     error::FileReadError,
-    hash::Sha256Hash,
-    Encryption,
-    HashWithLocation,
-    Location,
+    file::{
+        hash::Sha256Hash,
+        Encryption,
+        HashWithLocation,
+        Location,
+    },
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

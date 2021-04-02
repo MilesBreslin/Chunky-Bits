@@ -18,13 +18,13 @@ use crate::{
         MetadataFormat,
         MetadataTypes,
     },
+    error::{
+        ClusterError,
+        LocationParseError,
+        MetadataReadError,
+    },
     file::{
         self,
-        error::{
-            ClusterError,
-            LocationParseError,
-            MetadataReadError,
-        },
         CollectionDestination,
         FileReference,
         Location,

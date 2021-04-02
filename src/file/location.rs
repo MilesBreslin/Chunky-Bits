@@ -23,13 +23,13 @@ use tokio::{
 };
 use url::Url;
 
-use crate::file::{
+use crate::{
     error::{
         LocationError,
         LocationParseError,
         ShardError,
     },
-    ShardWriter,
+    file::ShardWriter,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

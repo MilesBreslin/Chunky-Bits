@@ -1,17 +1,18 @@
 use async_trait::async_trait;
-use rand::{self,};
 use serde::{
     Deserialize,
     Serialize,
 };
 
-use crate::file::{
+use crate::{
     error::{
         FileWriteError,
         ShardError,
     },
-    Location,
-    WeightedLocation,
+    file::{
+        Location,
+        WeightedLocation,
+    },
 };
 
 pub trait CollectionDestination {

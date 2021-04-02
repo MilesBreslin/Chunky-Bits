@@ -21,8 +21,8 @@ use crate::{
         ClusterWriterInnerState,
         ClusterWriterState,
     },
+    error::FileWriteError,
     file::{
-        error::FileWriteError,
         CollectionDestination,
         WeightedLocation,
     },

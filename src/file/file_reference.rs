@@ -31,19 +31,21 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::file::{
+use crate::{
     error::{
         FileReadError,
         FileWriteError,
     },
-    hash::Sha256Hash,
-    CollectionDestination,
-    Compression,
-    FilePart,
-    HashWithLocation,
-    Integrity,
-    Location,
-    ShardWriter,
+    file::{
+        hash::Sha256Hash,
+        CollectionDestination,
+        Compression,
+        FilePart,
+        HashWithLocation,
+        Integrity,
+        Location,
+        ShardWriter,
+    },
 };
 
 #[derive(Debug, Serialize, Deserialize)]

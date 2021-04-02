@@ -24,7 +24,7 @@ use warp::{
 
 use crate::{
     cluster::Cluster,
-    file::error::MetadataReadError,
+    error::MetadataReadError,
 };
 
 async fn index_get(
