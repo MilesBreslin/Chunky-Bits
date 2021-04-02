@@ -38,7 +38,7 @@ async fn sha256_async() {
         .collect()
         .await;
     // Ensure that the async version is correct
-    let async_items = orig_items
+    orig_items
         .drain(..)
         .map(|(hash, buf)| tokio::task::spawn(async move {
             // This is the function that contains unsafe code being tested
