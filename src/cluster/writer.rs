@@ -122,7 +122,7 @@ impl ClusterWriterState {
         if total_weight == 0 {
             return Err(errors.pop().unwrap());
         }
-        let sample = rand::thread_rng().gen_range(1..(total_weight + 1));
+        let sample = rand::thread_rng().gen_range(0..total_weight);
         let mut current_weight: usize = 0;
         for (index, node) in available_locations.iter() {
             current_weight += node.location.weight;
@@ -141,7 +141,7 @@ impl ClusterWriterState {
                 return Ok((*index, node));
             }
         }
-        Err(errors.pop().unwrap())
+        panic!("Invalid writer sample")
     }
 
     async fn invalidate_index(&self, index: usize, err: ShardError) -> () {
