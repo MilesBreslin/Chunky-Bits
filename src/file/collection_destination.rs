@@ -49,3 +49,26 @@ pub enum Compression {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Encryption {}
+
+/// Does not write anything. Just send the data to the void
+#[derive(Clone)]
+pub struct VoidDestination;
+
+impl CollectionDestination for VoidDestination {
+    type Writer = VoidDestination;
+
+    fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError> {
+        Ok(vec![VoidDestination; count])
+    }
+}
+
+#[async_trait]
+impl ShardWriter for VoidDestination {
+    async fn write_shard(
+        &mut self,
+        _hash: &str,
+        _bytes: &[u8],
+    ) -> Result<Vec<Location>, ShardError> {
+        Ok(vec![])
+    }
+}

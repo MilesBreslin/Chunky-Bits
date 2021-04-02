@@ -1,7 +1,7 @@
 use chunky_bits::file::hash::Sha256Hash;
 use futures::stream::{
-    StreamExt,
     FuturesOrdered,
+    StreamExt,
 };
 
 #[test]
@@ -28,11 +28,13 @@ async fn sha256_async_multithread() {
 async fn sha256_async() {
     // Generate hashes and bufs safely
     let mut orig_items: Vec<(Sha256Hash, Vec<u8>)> = (0..25)
-        .map(|i| tokio::task::spawn_blocking(move || {
-            let buf: Vec<u8> = (0..(1 << 22)).map(|_: usize| i).collect();
-            let hash = Sha256Hash::from_buf(&buf);
-            (hash, buf)
-        }))
+        .map(|i| {
+            tokio::task::spawn_blocking(move || {
+                let buf: Vec<u8> = (0..(1 << 22)).map(|_: usize| i).collect();
+                let hash = Sha256Hash::from_buf(&buf);
+                (hash, buf)
+            })
+        })
         .collect::<FuturesOrdered<_>>()
         .map(Result::unwrap)
         .collect()
@@ -40,11 +42,13 @@ async fn sha256_async() {
     // Ensure that the async version is correct
     orig_items
         .drain(..)
-        .map(|(hash, buf)| tokio::task::spawn(async move {
-            // This is the function that contains unsafe code being tested
-            let async_hash = Sha256Hash::from_buf_async(buf.as_slice()).await;
-            assert_eq!(hash, async_hash);
-        }))
+        .map(|(hash, buf)| {
+            tokio::task::spawn(async move {
+                // This is the function that contains unsafe code being tested
+                let async_hash = Sha256Hash::from_buf_async(buf.as_slice()).await;
+                assert_eq!(hash, async_hash);
+            })
+        })
         .collect::<FuturesOrdered<_>>()
         .map(Result::unwrap)
         .collect::<Vec<()>>()
