@@ -12,10 +12,12 @@ use std::{
 
 use chunky_bits::{
     cluster::{
-        ChunkSize,
+        sized_int::{
+            ChunkSize,
+            DataChunkCount,
+            ParityChunkCount,
+        },
         Cluster,
-        DataChunkCount,
-        ParityChunkCount,
     },
     file::{
         self,

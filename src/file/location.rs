@@ -25,8 +25,8 @@ use url::Url;
 
 use crate::file::{
     error::{
-        LocationParseError,
         LocationError,
+        LocationParseError,
         ShardError,
     },
     ShardWriter,
@@ -129,7 +129,7 @@ impl FromStr for Location {
             return Ok(Location::Local(
                 Url::parse(s)?
                     .to_file_path()
-                    .map_err(|_| LocationParseError::FilePathNotAbsolute)?
+                    .map_err(|_| LocationParseError::FilePathNotAbsolute)?,
             ));
         }
         Ok(Location::Local(FromStr::from_str(s).unwrap()))

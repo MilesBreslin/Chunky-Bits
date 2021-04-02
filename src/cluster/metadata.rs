@@ -15,8 +15,8 @@ use tokio::{
 
 use crate::file::{
     error::{
-        LocationParseError,
         LocationError,
+        LocationParseError,
         MetadataReadError,
         SerdeError,
     },
