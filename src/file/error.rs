@@ -1,4 +1,5 @@
 use std::{
+    convert::Infallible,
     error::Error,
     fmt::{
         self,
@@ -22,11 +23,18 @@ macro_rules! impl_from_err {
         $(
             impl_from_err!($error_type => $variant for $parent);
         )*
+        impl From<Infallible> for $parent {
+            fn from(e: Infallible) -> Self {
+                match e {}
+            }
+        }
     };
     ({ $($error_type:ty => $variant:ident),*, } for $parent:ident) => {
-        $(
-            impl_from_err!($error_type => $variant for $parent);
-        )*
+        impl_from_err!{
+            {
+                $($error_type => $variant),*
+            } for $parent
+        }
     };
 }
 
@@ -199,16 +207,30 @@ impl_from_err! {
 
 #[derive(Debug)]
 pub enum MetadataReadError {
-    PostExec(io::Error),
     FileRead(LocationError),
+    InvalidLocation(HttpUrlError),
+    PostExec(io::Error),
     Serde(SerdeError),
 }
 
 impl_from_err! {
     {
+        HttpUrlError => InvalidLocation,
         LocationError => FileRead,
         SerdeError => Serde,
     } for MetadataReadError
+}
+
+impl Display for MetadataReadError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use MetadataReadError::*;
+        match self {
+            FileRead(e) => write!(f, "File Read: {}", e),
+            InvalidLocation(e) => write!(f, "Invalid Location: {}", e),
+            PostExec(e) => write!(f, "Post-Execution: {}", e),
+            Serde(e) => write!(f, "Serde: {}", e),
+        }
+    }
 }
 
 #[derive(Debug)]

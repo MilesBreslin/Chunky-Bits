@@ -4,6 +4,7 @@ use std::{
         Display,
         Formatter,
     },
+    net::SocketAddr,
     num::NonZeroUsize,
     path::PathBuf,
     sync::Arc,
@@ -19,6 +20,7 @@ use chunky_bits::{
     file::{
         self,
         FileReference,
+        Location,
         WeightedLocation,
     },
     http::{
@@ -59,10 +61,10 @@ pub enum Command {
     HttpGateway {
         /// Cluster configuration to create the gateway for
         #[structopt(short, long)]
-        cluster: PathBuf,
+        cluster: Location,
         /// Address to listen on
         #[structopt(short, long, default_value = "127.0.0.1:8000")]
-        listen_addr: std::net::SocketAddr,
+        listen_addr: SocketAddr,
         /// Read only setting to disable put requests
         #[structopt(long)]
         read_only: bool,
@@ -71,7 +73,7 @@ pub enum Command {
     Put {
         /// A reference to a cluster config file
         #[structopt(short, long)]
-        cluster: PathBuf,
+        cluster: Location,
         /// Local file to upload to the cluster
         file: PathBuf,
         /// Rename the file during the upload
@@ -84,7 +86,7 @@ pub enum Command {
     /// Show information about a given cluster
     ClusterInfo {
         /// A reference to a cluster config file
-        cluster: PathBuf,
+        cluster: Location,
     },
     /// Create a file reference from a file
     EncodeFile {
@@ -184,12 +186,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             listen_addr,
             read_only,
         } => {
-            let cluster: Cluster = serde_yaml::from_reader(
-                std::fs::File::open(&cluster)
-                    .map_err(ErrorMessage::with_prefix("Cluster Definition"))?,
-            )?;
+            let cluster = Cluster::from_location(cluster)
+                .await
+                .map_err(ErrorMessage::with_prefix("Cluster Definition"))?;
             if read_only {
-                warp::serve(cluster_filter_get(cluster)).bind(listen_addr).await;
+                warp::serve(cluster_filter_get(cluster))
+                    .bind(listen_addr)
+                    .await;
             } else {
                 warp::serve(cluster_filter(cluster)).bind(listen_addr).await;
             }
@@ -200,10 +203,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             filename,
             profile,
         } => {
-            let cluster: Cluster = serde_yaml::from_reader(
-                std::fs::File::open(&cluster)
-                    .map_err(ErrorMessage::with_prefix("Cluster Definition"))?,
-            )?;
+            let cluster = Cluster::from_location(cluster)
+                .await
+                .map_err(ErrorMessage::with_prefix("Cluster Definition"))?;
             let mut f = File::open(&file)
                 .await
                 .map_err(ErrorMessage::with_prefix("Target File"))?;
@@ -224,7 +226,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
         },
         Command::ClusterInfo { cluster } => {
-            let cluster: Cluster = serde_yaml::from_reader(std::fs::File::open(&cluster)?)?;
+            let cluster = Cluster::from_location(cluster)
+                .await
+                .map_err(ErrorMessage::with_prefix("Cluster Definition"))?;
             println!("{}", serde_yaml::to_string(&cluster)?);
         },
         Command::EncodeFile {

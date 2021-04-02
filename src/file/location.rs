@@ -1,12 +1,15 @@
 use std::{
+    convert::TryFrom,
     fmt,
     hash::Hash,
-    path::PathBuf,
+    path::{
+        Path,
+        PathBuf,
+    },
     str::FromStr,
 };
 
 use async_trait::async_trait;
-use futures::future::FutureExt;
 use serde::{
     Deserialize,
     Serialize,
@@ -37,58 +40,65 @@ pub enum Location {
 }
 
 impl Location {
-    pub(crate) async fn read(&self) -> Result<Vec<u8>, LocationError> {
+    pub async fn read(&self) -> Result<Vec<u8>, LocationError> {
+        use Location::*;
         match self {
-            Location::Local(path) => match fs::read(&path).await {
+            Local(path) => match fs::read(&path).await {
                 Ok(bytes) => Ok(bytes),
                 Err(err) => Err(err.into()),
             },
-            Location::Http(url) => match reqwest::get(Into::<Url>::into(url.clone())).await {
+            Http(url) => match reqwest::get(Into::<Url>::into(url.clone())).await {
                 Ok(resp) => Ok(resp.bytes().await?.into_iter().collect()),
                 Err(err) => Err(err.into()),
             },
         }
     }
 
-    pub(crate) async fn write_subfile(
-        &self,
-        name: &str,
-        bytes: &[u8],
-    ) -> Result<Location, ShardError> {
+    pub async fn write<T>(&self, bytes: T) -> Result<(), LocationError>
+    where
+        T: AsRef<[u8]> + Into<Vec<u8>>,
+    {
         use Location::*;
         match self {
+            Local(path) => {
+                File::create(&path).await?.write_all(bytes.as_ref()).await?;
+                Ok(())
+            },
+            Http(url) => {
+                let response = reqwest::Client::new()
+                    .put(Into::<Url>::into(url.clone()))
+                    .body(bytes.into())
+                    .send()
+                    .await;
+                response?;
+                Ok(())
+            },
+        }
+    }
+
+    pub async fn write_subfile<T>(&self, name: &str, bytes: T) -> Result<Location, ShardError>
+    where
+        T: AsRef<[u8]> + Into<Vec<u8>>,
+    {
+        use Location::*;
+        let target_location: Location = match self {
             Http(url) => {
                 let mut target_url: Url = url.clone().into();
                 target_url.path_segments_mut().unwrap().push(name);
-                let result = reqwest::Client::new()
-                    .put(target_url.clone())
-                    .body(bytes.to_owned())
-                    .send()
-                    .await;
-                let location = Http(HttpUrl(target_url));
-                match result {
-                    Ok(_) => Ok(location),
-                    Err(err) => Err(ShardError {
-                        location: location,
-                        error: err.into(),
-                    }),
-                }
+                Http(HttpUrl(target_url))
             },
             Local(path) => {
                 let mut target_path = path.clone();
                 target_path.push(name);
-                let result = File::create(&target_path)
-                    .then(|res| async move { res?.write_all(bytes).await })
-                    .await;
-                let location = Local(target_path);
-                match result {
-                    Ok(_) => Ok(location),
-                    Err(err) => Err(ShardError {
-                        location: location,
-                        error: err.into(),
-                    }),
-                }
+                target_path.into()
             },
+        };
+        match target_location.write(bytes).await {
+            Ok(_) => Ok(target_location),
+            Err(err) => Err(ShardError {
+                location: target_location,
+                error: err.into(),
+            }),
         }
     }
 }
@@ -134,7 +144,6 @@ impl FromStr for HttpUrl {
     type Err = HttpUrlError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        use std::convert::TryFrom;
         Ok(Self::try_from(Url::from_str(s)?)?)
     }
 }
@@ -145,7 +154,7 @@ impl Into<Url> for HttpUrl {
     }
 }
 
-impl std::convert::TryFrom<Url> for HttpUrl {
+impl TryFrom<Url> for HttpUrl {
     type Error = HttpUrlError;
 
     fn try_from(u: Url) -> Result<Self, Self::Error> {
@@ -153,5 +162,44 @@ impl std::convert::TryFrom<Url> for HttpUrl {
             "http" | "https" => Ok(Self(u)),
             _ => Err(HttpUrlError::NotHttp),
         }
+    }
+}
+
+macro_rules! impl_try_from_string {
+    ($type:ty) => {
+        impl TryFrom<$type> for HttpUrl {
+            type Error = HttpUrlError;
+
+            fn try_from(s: $type) -> Result<Self, Self::Error> {
+                FromStr::from_str(AsRef::<str>::as_ref(&s))
+            }
+        }
+        impl TryFrom<$type> for Location {
+            type Error = HttpUrlError;
+
+            fn try_from(s: $type) -> Result<Self, Self::Error> {
+                FromStr::from_str(AsRef::<str>::as_ref(&s))
+            }
+        }
+    };
+}
+impl_try_from_string!(&str);
+impl_try_from_string!(String);
+
+macro_rules! impl_from_path {
+    ($type:ty) => {
+        impl From<$type> for Location {
+            fn from(p: $type) -> Self {
+                Location::Local(p.to_owned())
+            }
+        }
+    };
+}
+impl_from_path!(&Path);
+impl_from_path!(PathBuf);
+
+impl From<HttpUrl> for Location {
+    fn from(url: HttpUrl) -> Self {
+        Location::Http(url)
     }
 }

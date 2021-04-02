@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    convert::TryInto,
+    path::PathBuf,
+};
 
 use serde::{
     de::DeserializeOwned,
@@ -10,10 +13,14 @@ use tokio::{
     process::Command,
 };
 
-use crate::file::error::{
-    LocationError,
-    MetadataReadError,
-    SerdeError,
+use crate::file::{
+    error::{
+        HttpUrlError,
+        LocationError,
+        MetadataReadError,
+        SerdeError,
+    },
+    Location,
 };
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -136,5 +143,17 @@ impl MetadataFormat {
             JsonStrict => serde_json::from_slice(v.as_ref())?,
             Json | JsonPretty | Yaml => serde_yaml::from_slice(v.as_ref())?,
         })
+    }
+
+    pub async fn from_location<T>(
+        &self,
+        location: impl TryInto<Location, Error = impl Into<HttpUrlError>>,
+    ) -> Result<T, MetadataReadError>
+    where
+        T: DeserializeOwned,
+    {
+        let location: Location = TryInto::try_into(location).map_err(|err| err.into())?;
+        let bytes = location.read().await?;
+        Ok(self.from_bytes(&bytes)?)
     }
 }

@@ -1,4 +1,5 @@
 use std::{
+    convert::TryInto,
     num::NonZeroUsize,
     sync::Arc,
 };
@@ -14,16 +15,19 @@ use crate::{
         ClusterNodes,
         ClusterProfile,
         ClusterProfiles,
+        MetadataFormat,
         MetadataTypes,
     },
     file::{
         self,
         error::{
             ClusterError,
+            HttpUrlError,
             MetadataReadError,
         },
         CollectionDestination,
         FileReference,
+        Location,
     },
 };
 
@@ -39,6 +43,12 @@ pub struct Cluster {
 }
 
 impl Cluster {
+    pub async fn from_location(
+        location: impl TryInto<Location, Error = impl Into<HttpUrlError>>,
+    ) -> Result<Cluster, MetadataReadError> {
+        MetadataFormat::Yaml.from_location(location).await
+    }
+
     pub async fn write_file<R>(
         &self,
         filename: &str,
