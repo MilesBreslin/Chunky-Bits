@@ -95,7 +95,7 @@ impl Location {
         };
         match target_location.write(bytes).await {
             Ok(_) => Ok(target_location),
-            Err(err) => Err(ShardError {
+            Err(err) => Err(ShardError::LocationError {
                 location: target_location,
                 error: err.into(),
             }),

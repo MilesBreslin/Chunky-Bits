@@ -37,3 +37,12 @@ impl FromStr for WeightedLocation {
         })
     }
 }
+
+impl From<Location> for WeightedLocation {
+    fn from(loc: Location) -> Self {
+        WeightedLocation {
+            weight: Self::default_weight(),
+            location: loc,
+        }
+    }
+}

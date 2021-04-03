@@ -159,7 +159,7 @@ impl FileReference {
                         r.encode_sep::<&[u8], Vec<u8>>(&data_chunks, &mut parity_chunks)?;
 
                         // Get some writers
-                        let mut writers = destination.get_writers(data + parity).unwrap();
+                        let mut writers = destination.get_writers(data + parity)?;
 
                         // Hash and write all chunks
                         let mut write_results_iter = data_chunks

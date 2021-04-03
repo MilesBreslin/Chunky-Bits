@@ -74,14 +74,21 @@ impl_from_err! {
 
 #[derive(Debug)]
 /// When writing a shard, the location of the failure should also be known
-pub struct ShardError {
-    pub location: Location,
-    pub error: LocationError,
+pub enum ShardError {
+    NotEnoughAvailability,
+    LocationError {
+        location: Location,
+        error: LocationError,
+    },
 }
 
 impl Display for ShardError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "<{}> {}", self.location, self.error)
+        use ShardError::*;
+        match self {
+            NotEnoughAvailability => write!(f, "Not enough writer availability"),
+            LocationError { location, error } => write!(f, "<{}> {}", location, error),
+        }
     }
 }
 
