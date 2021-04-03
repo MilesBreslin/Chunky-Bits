@@ -127,6 +127,15 @@ impl CollectionDestination for ClusterNodesWithProfile {
     type Writer = ClusterWriter;
 
     fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError> {
+        // Does not account for zone rules. ShardWriters will handle that
+        let possible_nodes: usize = <Self as AsRef<ClusterNodes>>::as_ref(self)
+            .0
+            .iter()
+            .map(|node| node.repeat + 1)
+            .sum();
+        if possible_nodes < count {
+            return Err(FileWriteError::NotEnoughWriters);
+        }
         let writer = ClusterWriter {
             state: Arc::new(ClusterWriterState {
                 parent: self.clone(),

@@ -8,13 +8,16 @@ use std::{
 
 use chunky_bits::{
     cluster::{
-        MetadataTypes,
-        MetadataPath,
         Cluster,
+        ClusterNode,
+        MetadataPath,
+        MetadataTypes,
     },
-    file::{
-        Location,
+    error::{
+        ClusterError,
+        FileWriteError,
     },
+    file::Location,
 };
 use tempfile::{
     tempdir,
@@ -35,6 +38,7 @@ struct TestCluster {
 
 impl Deref for TestCluster {
     type Target = Cluster;
+
     fn deref(&self) -> &Self::Target {
         &self.cluster
     }
@@ -52,25 +56,30 @@ impl TestCluster {
         let data_dir = tempdir()?;
         let mut cluster = Cluster::from_location("./examples/test.yaml").await?;
 
-        // If the file changes, this should change, too
-        assert_eq!(cluster.destinations.0.len(), 1);
-
-        let ref mut node = cluster.destinations.0.first_mut().unwrap();
-        node.location = Location::from(metadata_dir.path()).into();
-
         match cluster.metadata {
-            MetadataTypes::Path(MetadataPath{ref mut path, ..}) => {
+            MetadataTypes::Path(MetadataPath { ref mut path, .. }) => {
                 *path = data_dir.path().to_owned();
             },
             #[allow(unreachable_patterns)]
             _ => panic!("Unexpected MetadataPath"),
         }
 
-        Ok(TestCluster {
+        let mut cluster = TestCluster {
             cluster,
             data_dir,
             metadata_dir,
-        })
+        };
+
+        // If the file changes, this should change, too
+        assert_eq!(cluster.destinations.0.len(), 1);
+
+        cluster.get_node_mut().location = Location::from(cluster.metadata_dir.path()).into();
+
+        Ok(cluster)
+    }
+
+    fn get_node_mut(&mut self) -> &mut ClusterNode {
+        (*self).destinations.0.first_mut().unwrap()
     }
 }
 
@@ -83,8 +92,33 @@ async fn test_cluster() -> Result<(), Box<dyn Error>> {
 #[tokio::test]
 async fn test_cluster_write() -> Result<(), Box<dyn Error>> {
     let cluster = TestCluster::new().await?;
-    let cluster_profile = cluster.get_profile(None).unwrap();
+    let profile = cluster.get_profile(None).unwrap();
     let mut reader = repeat(0).take(1);
-    cluster.write_file("TESTFILE", &mut reader, cluster_profile, None).await?;
+    cluster
+        .write_file("TESTFILE", &mut reader, profile, None)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cluster_not_enough_writers() -> Result<(), Box<dyn Error>> {
+    let available_nodes = 2;
+    let mut cluster = TestCluster::new().await?;
+    // repeat 0 is still 1 usage of the node
+    cluster.get_node_mut().repeat = available_nodes - 1;
+    let profile = cluster.get_profile(None).unwrap();
+    let mut reader = repeat(0).take(1);
+    match cluster
+        .write_file("TESTFILE", &mut reader, profile, None)
+        .await
+    {
+        Err(ClusterError::FileWrite(FileWriteError::NotEnoughWriters)) => {},
+        Ok(_) => panic!(
+            "Wrote {} to {} nodes",
+            (Into::<usize>::into(profile.data_chunks) + Into::<usize>::into(profile.parity_chunks)),
+            available_nodes,
+        ),
+        Err(err) => panic!("Unexpected cluster write error: {}", err,),
+    }
     Ok(())
 }

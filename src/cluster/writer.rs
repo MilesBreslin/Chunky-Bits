@@ -49,7 +49,7 @@ impl ClusterWriterState {
             ref mut errors,
         } = *state;
         if available_indexes.len() == 0 {
-            return Err(errors.pop().unwrap());
+            return Err(errors.pop().unwrap_or(ShardError::NotEnoughAvailability));
         }
         let required_zones = zone_status
             .iter()
@@ -120,7 +120,7 @@ impl ClusterWriterState {
             .map(|(_, node)| node.location.weight)
             .sum();
         if total_weight == 0 {
-            return Err(errors.pop().unwrap());
+            return Err(errors.pop().unwrap_or(ShardError::NotEnoughAvailability));
         }
         let sample = rand::thread_rng().gen_range(0..total_weight);
         let mut current_weight: usize = 0;
