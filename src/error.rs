@@ -240,6 +240,8 @@ impl Display for MetadataReadError {
     }
 }
 
+impl std::error::Error for MetadataReadError {}
+
 #[derive(Debug)]
 pub enum LocationParseError {
     Parse(url::ParseError),
