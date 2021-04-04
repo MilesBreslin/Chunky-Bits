@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fmt::{
         self,
         Display,
@@ -18,6 +19,7 @@ use chunky_bits::{
             ParityChunkCount,
         },
         Cluster,
+        FileOrDirectory,
     },
     file::{
         self,
@@ -144,6 +146,15 @@ pub enum Command {
     GetHashes {
         /// File reference metadata file
         file: PathBuf,
+    },
+    /// List files in a cluster
+    Ls {
+        /// A reference to a cluster config file
+        #[structopt(short, long)]
+        cluster: Location,
+        path: PathBuf,
+        #[structopt(short, long)]
+        recursive: bool,
     },
 }
 
@@ -306,6 +317,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     println!("{}", location_with_hash.sha256);
                 }
             }
+        },
+        Command::Ls {
+            cluster,
+            path,
+            recursive,
+        } => {
+            let cluster = Cluster::from_location(cluster).await?;
+            let files: BTreeSet<FileOrDirectory> = if recursive {
+                cluster.list_files_recursive(path).await?
+                    .drain(..)
+                    .collect()
+            } else {
+                cluster.list_files(path).await?
+                    .drain(..)
+                    .collect()
+            };
+            println!("{}", serde_yaml::to_string(&files)?);
         },
     }
     Ok(())

@@ -1,6 +1,10 @@
 use std::{
     convert::TryInto,
-    path::PathBuf,
+    path::{
+        Component,
+        Path,
+        PathBuf,
+    },
 };
 
 use serde::{
@@ -10,6 +14,7 @@ use serde::{
 };
 use tokio::{
     fs,
+    io,
     process::Command,
 };
 
@@ -31,23 +36,36 @@ pub enum MetadataTypes {
 }
 
 impl MetadataTypes {
-    pub async fn write<T, U>(&self, filename: &T, payload: &U) -> Result<(), MetadataReadError>
+    pub async fn write<T>(
+        &self,
+        path: impl AsRef<Path>,
+        payload: &T,
+    ) -> Result<(), MetadataReadError>
     where
-        T: std::borrow::Borrow<str>,
-        U: Serialize,
+        T: Serialize,
     {
         match self {
-            MetadataTypes::Path(meta_path) => meta_path.write(filename, payload).await,
+            MetadataTypes::Path(meta_path) => meta_path.write(path, payload).await,
         }
     }
 
-    pub async fn read<T, U>(&self, filename: &T) -> Result<U, MetadataReadError>
+    pub async fn read<T>(&self, path: impl AsRef<Path>) -> Result<T, MetadataReadError>
     where
-        T: std::borrow::Borrow<str>,
-        U: DeserializeOwned,
+        T: DeserializeOwned,
     {
         match self {
-            MetadataTypes::Path(meta_path) => meta_path.read(filename).await,
+            MetadataTypes::Path(meta_path) => meta_path.read(path).await,
+        }
+    }
+
+    pub async fn list(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<Vec<FileOrDirectory>, MetadataReadError> {
+        match self {
+            MetadataTypes::Path(meta_path) => {
+                Ok(meta_path.list(path).await.map_err(LocationError::from)?)
+            },
         }
     }
 }
@@ -63,18 +81,19 @@ pub struct MetadataPath {
 }
 
 impl MetadataPath {
-    pub async fn write<T, U>(&self, filename: &T, payload: &U) -> Result<(), MetadataReadError>
+    pub async fn write<T>(
+        &self,
+        path: impl AsRef<Path>,
+        payload: &T,
+    ) -> Result<(), MetadataReadError>
     where
-        T: std::borrow::Borrow<str>,
-        U: Serialize,
+        T: Serialize,
     {
+        let path = self.sub_path(path);
         let payload = self.format.to_string(payload)?;
-        fs::write(
-            &format!("{}/{}", self.path.display(), filename.borrow()),
-            payload,
-        )
-        .await
-        .map_err(LocationError::from)?;
+        fs::write(path, payload)
+            .await
+            .map_err(LocationError::from)?;
         if let Some(put_script) = &self.put_script {
             let res = Command::new("/bin/sh")
                 .arg("-c")
@@ -93,15 +112,63 @@ impl MetadataPath {
         Ok(())
     }
 
-    pub async fn read<T, U>(&self, filename: &T) -> Result<U, MetadataReadError>
+    pub async fn read<T>(&self, path: impl AsRef<Path>) -> Result<T, MetadataReadError>
     where
-        T: std::borrow::Borrow<str>,
-        U: DeserializeOwned,
+        T: DeserializeOwned,
     {
-        let bytes = fs::read(&format!("{}/{}", self.path.display(), filename.borrow()))
-            .await
-            .map_err(LocationError::from)?;
+        let path = self.sub_path(path);
+        let bytes = fs::read(path).await.map_err(LocationError::from)?;
         Ok(self.format.from_bytes(&bytes)?)
+    }
+
+    pub async fn list(&self, path: impl AsRef<Path>) -> io::Result<Vec<FileOrDirectory>> {
+        let path = self.sub_path(path);
+        let mut items: Vec<FileOrDirectory> = Vec::new();
+        let mut dir_reader = fs::read_dir(&path).await?;
+        while let Some(entry) = dir_reader.next_entry().await? {
+            match FileOrDirectory::from_local_path(entry.path().clone()).await {
+                Ok(mut file_or_dir) => {
+                    // Remove parent path prefix
+                    let sub_path: &PathBuf = file_or_dir.as_ref();
+                    let mut parent_components = self.path.components();
+                    let mut sub_components = sub_path.components().peekable();
+                    loop {
+                        match (parent_components.next(), sub_components.peek()) {
+                            (Some(x), Some(y)) if x == *y => {
+                                sub_components.next();
+                            },
+                            (Some(_), None) => {
+                                panic!("Parent path length exceeds child length");
+                            },
+                            _ => {
+                                break;
+                            },
+                        }
+                    }
+                    let new_sub_path: PathBuf = sub_components.collect();
+                    let sub_path: &mut PathBuf = file_or_dir.as_mut();
+                    *sub_path = new_sub_path;
+                    items.push(file_or_dir);
+                },
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {},
+                Err(err) => {
+                    return Err(err);
+                },
+            }
+        }
+        Ok(items)
+    }
+
+    fn sub_path(&self, path: impl AsRef<Path>) -> PathBuf {
+        let mut new_path = self.path.clone();
+        new_path.extend(path.as_ref().components().filter(|c| {
+            if let Component::Normal(_) = c {
+                true
+            } else {
+                false
+            }
+        }));
+        new_path
     }
 }
 
@@ -155,5 +222,57 @@ impl MetadataFormat {
         let location: Location = TryInto::try_into(location).map_err(|err| err.into())?;
         let bytes = location.read().await?;
         Ok(self.from_bytes(&bytes)?)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum FileOrDirectory {
+    File(PathBuf),
+    Directory(PathBuf),
+}
+
+impl FileOrDirectory {
+    pub async fn from_local_path(path: PathBuf) -> io::Result<Self> {
+        let metadata = fs::metadata(&path).await?;
+        if metadata.is_dir() {
+            Ok(FileOrDirectory::Directory(path))
+        } else if metadata.is_file() {
+            Ok(FileOrDirectory::File(path))
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Not a file or directory",
+            ))
+        }
+    }
+}
+
+impl AsRef<PathBuf> for FileOrDirectory {
+    fn as_ref(&self) -> &PathBuf {
+        use FileOrDirectory::*;
+        match self {
+            File(path) => &path,
+            Directory(path) => &path,
+        }
+    }
+}
+
+impl AsMut<PathBuf> for FileOrDirectory {
+    fn as_mut(&mut self) -> &mut PathBuf {
+        use FileOrDirectory::*;
+        match self {
+            File(ref mut path) => path,
+            Directory(ref mut path) => path,
+        }
+    }
+}
+
+impl Into<PathBuf> for FileOrDirectory {
+    fn into(self) -> PathBuf {
+        use FileOrDirectory::*;
+        match self {
+            File(path) => path,
+            Directory(path) => path,
+        }
     }
 }

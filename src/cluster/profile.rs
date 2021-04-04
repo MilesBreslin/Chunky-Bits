@@ -22,10 +22,7 @@ pub struct ClusterProfiles {
 }
 
 impl ClusterProfiles {
-    pub fn get<'a, T>(&self, profile: T) -> Option<&'_ ClusterProfile>
-    where
-        T: Into<Option<&'a str>>,
-    {
+    pub fn get<'a>(&self, profile: impl Into<Option<&'a str>>) -> Option<&'_ ClusterProfile> {
         let profile = profile.into();
         match profile {
             Some("default") | None => Some(&self.default),
@@ -33,10 +30,11 @@ impl ClusterProfiles {
         }
     }
 
-    pub fn insert<T>(&mut self, name: T, profile: ClusterProfile) -> Option<ClusterProfile>
-    where
-        T: Into<Option<String>>,
-    {
+    pub fn insert(
+        &mut self,
+        name: impl Into<Option<String>>,
+        profile: ClusterProfile,
+    ) -> Option<ClusterProfile> {
         let name = name.into();
         match name.as_ref().map(|s| s.as_str()) {
             Some("default") | None => {
