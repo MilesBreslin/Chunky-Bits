@@ -1,13 +1,17 @@
 use std::{
+    collections::VecDeque,
+    convert::TryFrom,
     error::Error,
     ops::{
         Deref,
         DerefMut,
     },
+    sync::Arc,
 };
 
 use chunky_bits::{
     cluster::{
+        sized_int::ChunkSize,
         Cluster,
         ClusterNode,
         MetadataPath,
@@ -17,14 +21,20 @@ use chunky_bits::{
         ClusterError,
         FileWriteError,
     },
-    file::Location,
+    file::{
+        Integrity,
+        Location,
+    },
 };
+use futures::stream;
 use tempfile::{
     tempdir,
     TempDir,
 };
 use tokio::io::{
+    self,
     repeat,
+    AsyncRead,
     AsyncReadExt,
 };
 
@@ -81,6 +91,13 @@ impl TestCluster {
     fn get_node_mut(&mut self) -> &mut ClusterNode {
         (*self).destinations.0.first_mut().unwrap()
     }
+
+    fn default_reader() -> impl AsyncRead {
+        tokio_util::io::StreamReader::new(stream::iter((0..20).map(|i: u8| {
+            let bytes: VecDeque<u8> = ((0 as usize)..(1 << 10)).map(|_| i).collect();
+            Ok::<_, io::Error>(bytes)
+        })))
+    }
 }
 
 #[tokio::test]
@@ -120,5 +137,48 @@ async fn test_cluster_not_enough_writers() -> Result<(), Box<dyn Error>> {
         ),
         Err(err) => panic!("Unexpected cluster write error: {}", err,),
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_resilver() -> Result<(), Box<dyn Error>> {
+    let cluster = TestCluster::new().await?;
+    let mut profile = cluster.get_profile(None).unwrap().clone();
+    profile.chunk_size = ChunkSize::try_from(10)?;
+    let mut reader = TestCluster::default_reader();
+    cluster
+        .write_file("TESTFILE", &mut reader, &profile, None)
+        .await?;
+    let mut file_ref = cluster.get_file_ref("TESTFILE").await?;
+    // File should be 100% Valid
+    assert!(file_ref.verify().await.into_iter().all(|part| part
+        .values()
+        .all(|integrity| Integrity::Valid.eq(integrity))));
+    for part in file_ref.parts.iter_mut() {
+        // Delete 1 / 3 data chunks
+        let location_with_hash = part.data.first().unwrap();
+        let location = location_with_hash.locations.first().unwrap();
+        let _ = location.delete().await;
+        assert!(location.read().await.is_err());
+
+        // Delete 1 / 2 parity chunks
+        let location_with_hash = part.parity.first().unwrap();
+        let location = location_with_hash.locations.first().unwrap();
+        let _ = location.delete().await;
+        assert!(location.read().await.is_err());
+    }
+    // File should not be 100% Valid
+    assert!(!file_ref.verify().await.into_iter().all(|part| part
+        .values()
+        .all(|integrity| Integrity::Valid.eq(integrity))));
+    let report = file_ref
+        .resilver(Arc::new(cluster.get_destination(&profile).await))
+        .await;
+    // All of the parts should report no errors during resilver
+    assert!(report.iter().all(Result::is_ok));
+    // File should not be 100% Valid
+    assert!(!file_ref.verify().await.into_iter().all(|part| part
+        .values()
+        .all(|integrity| Integrity::Valid.eq(integrity))));
     Ok(())
 }

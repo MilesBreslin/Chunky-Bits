@@ -7,6 +7,7 @@ use std::{
 use futures::{
     future::FutureExt,
     stream::{
+        self,
         FuturesOrdered,
         FuturesUnordered,
         StreamExt,
@@ -35,6 +36,7 @@ use crate::{
     error::{
         FileReadError,
         FileWriteError,
+        ShardError,
     },
     file::{
         hash::Sha256Hash,
@@ -287,5 +289,22 @@ impl FileReference {
             .collect::<FuturesOrdered<_>>()
             .collect()
             .await
+    }
+
+    pub async fn resilver<D>(
+        &mut self,
+        destination: Arc<D>,
+    ) -> Vec<Result<HashMap<&'_ Sha256Hash, Result<Vec<&'_ Location>, ShardError>>, FileWriteError>>
+    where
+        D: CollectionDestination + Send + Sync + 'static,
+    {
+        stream::iter(
+            self.parts
+                .iter_mut()
+                .map(|part| part.resilver(destination.clone())),
+        )
+        .buffered(10)
+        .collect()
+        .await
     }
 }

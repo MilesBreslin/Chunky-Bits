@@ -101,6 +101,21 @@ impl Location {
             }),
         }
     }
+
+    pub async fn delete(&self) -> Result<(), LocationError> {
+        use Location::*;
+        match self {
+            Http(url) => {
+                let url: Url = url.clone().into();
+                reqwest::Client::new().delete(url).send().await?;
+                Ok(())
+            },
+            Local(path) => {
+                fs::remove_file(path).await?;
+                Ok(())
+            },
+        }
+    }
 }
 
 impl fmt::Display for Location {

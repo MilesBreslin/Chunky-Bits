@@ -325,13 +325,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let cluster = Cluster::from_location(cluster).await?;
             let files: BTreeSet<FileOrDirectory> = if recursive {
-                cluster.list_files_recursive(path).await?
+                cluster
+                    .list_files_recursive(path)
+                    .await?
                     .drain(..)
                     .collect()
             } else {
-                cluster.list_files(path).await?
-                    .drain(..)
-                    .collect()
+                cluster.list_files(path).await?.drain(..).collect()
             };
             println!("{}", serde_yaml::to_string(&files)?);
         },

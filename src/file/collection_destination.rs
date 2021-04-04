@@ -18,6 +18,13 @@ use crate::{
 pub trait CollectionDestination {
     type Writer: ShardWriter + Send + Sync;
     fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError>;
+    fn get_used_writers(
+        &self,
+        locations: &[Option<&Location>],
+    ) -> Result<Vec<Self::Writer>, FileWriteError> {
+        let writers_needed = locations.iter().filter_map(|loc| *loc).count();
+        self.get_writers(writers_needed)
+    }
 }
 
 impl CollectionDestination for Vec<WeightedLocation> {

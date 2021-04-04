@@ -76,6 +76,7 @@ impl_from_err! {
 /// When writing a shard, the location of the failure should also be known
 pub enum ShardError {
     NotEnoughAvailability,
+    NotEnoughChunks,
     LocationError {
         location: Location,
         error: LocationError,
@@ -87,6 +88,7 @@ impl Display for ShardError {
         use ShardError::*;
         match self {
             NotEnoughAvailability => write!(f, "Not enough writer availability"),
+            NotEnoughChunks => write!(f, "Not enough chunks"),
             LocationError { location, error } => write!(f, "<{}> {}", location, error),
         }
     }
