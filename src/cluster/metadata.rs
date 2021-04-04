@@ -227,8 +227,8 @@ impl MetadataFormat {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum FileOrDirectory {
-    File(PathBuf),
     Directory(PathBuf),
+    File(PathBuf),
 }
 
 impl FileOrDirectory {
