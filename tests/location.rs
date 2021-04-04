@@ -26,6 +26,7 @@ async fn location_write() -> Result<(), Box<dyn Error>> {
         format!("{}/TESTFILE", dir_location),
         format!("{}", location),
     );
-    assert_eq!(payload, payload_read,);
+    assert!(location.is_child_of(&dir_location));
+    assert_eq!(payload, payload_read);
     Ok(())
 }

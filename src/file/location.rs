@@ -116,6 +116,34 @@ impl Location {
             },
         }
     }
+
+    pub fn is_child_of(&self, other: &Location) -> bool {
+        let (left, right) = (self, other);
+        use Location::*;
+        match (left, right) {
+            (Http(left), Http(right)) => {
+                let (mut left, right): (Url, Url) = (left.clone().into(), right.clone().into());
+                if let Ok(mut left) = left.path_segments_mut() {
+                    left.pop();
+                } else {
+                    return false;
+                }
+                left == right
+            },
+            (Local(left), Local(right)) => {
+                if let Some(left) = left.parent() {
+                    left == right
+                } else {
+                    false
+                }
+            },
+            _ => false,
+        }
+    }
+
+    pub fn is_parent_of(&self, other: &Location) -> bool {
+        other.is_child_of(self)
+    }
 }
 
 impl fmt::Display for Location {

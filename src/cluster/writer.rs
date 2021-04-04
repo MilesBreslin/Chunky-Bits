@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 use crate::{
     cluster::{
         ClusterNode,
+        ClusterNodes,
         ClusterNodesWithProfile,
         ZoneRule,
         ZoneRules,
@@ -42,15 +43,71 @@ impl ClusterWriterState {
     async fn next_writer(&self) -> Result<(usize, &ClusterNode), ShardError> {
         let (nodes, _profile) = self.parent.0.as_ref();
         let mut state = self.inner_state.lock().await;
-        let ClusterWriterInnerState {
-            ref mut available_indexes,
-            ref failed_indexes,
-            zone_status: ZoneRules(ref mut zone_status),
-            ref mut errors,
-        } = *state;
-        if available_indexes.len() == 0 {
-            return Err(errors.pop().unwrap_or(ShardError::NotEnoughAvailability));
+        if state.available_indexes.len() == 0 {
+            return Err(state
+                .errors
+                .pop()
+                .unwrap_or(ShardError::NotEnoughAvailability));
         }
+        let available_locations = state.get_available_locations(nodes);
+        let total_weight: usize = available_locations
+            .iter()
+            .map(|(_, node)| node.location.weight)
+            .sum();
+        if total_weight == 0 {
+            return Err(state
+                .errors
+                .pop()
+                .unwrap_or(ShardError::NotEnoughAvailability));
+        }
+        let sample = rand::thread_rng().gen_range(0..total_weight);
+        let mut current_weight: usize = 0;
+        for (index, node) in available_locations.iter() {
+            current_weight += node.location.weight;
+            if current_weight > sample {
+                state.remove_availability(*index, node);
+                return Ok((*index, node));
+            }
+        }
+        panic!("Invalid writer sample")
+    }
+
+    async fn invalidate_index(&self, index: usize, err: ShardError) -> () {
+        let (nodes, _profile) = self.parent.0.as_ref();
+        let mut state = self.inner_state.lock().await;
+        state.failed_indexes.insert(index);
+        state.errors.push(err);
+        if let Some(node) = nodes.0.get(index) {
+            for zone in node.zones.iter() {
+                if let Some(ZoneRule {
+                    ref mut minimum, ..
+                }) = state.zone_status.0.get_mut(zone)
+                {
+                    *minimum += 1;
+                }
+                if let Some(ZoneRule {
+                    maximum: Some(ref mut maximum),
+                    ..
+                }) = state.zone_status.0.get_mut(zone)
+                {
+                    *maximum += 1;
+                }
+            }
+        }
+    }
+}
+
+impl ClusterWriterInnerState {
+    pub(super) fn get_available_locations<'a>(
+        &self,
+        nodes: &'a ClusterNodes,
+    ) -> Vec<(usize, &'a ClusterNode)> {
+        let ClusterWriterInnerState {
+            ref available_indexes,
+            ref failed_indexes,
+            zone_status: ZoneRules(ref zone_status),
+            ..
+        } = self;
         let required_zones = zone_status
             .iter()
             .filter_map(
@@ -83,7 +140,7 @@ impl ClusterWriterState {
                 },
             )
             .collect::<HashSet<&String>>();
-        let available_locations = nodes
+        nodes
             .0
             .iter()
             .enumerate()
@@ -114,55 +171,24 @@ impl ClusterWriterState {
                 }
                 false
             })
-            .collect::<Vec<_>>();
-        let total_weight: usize = available_locations
-            .iter()
-            .map(|(_, node)| node.location.weight)
-            .sum();
-        if total_weight == 0 {
-            return Err(errors.pop().unwrap_or(ShardError::NotEnoughAvailability));
-        }
-        let sample = rand::thread_rng().gen_range(0..total_weight);
-        let mut current_weight: usize = 0;
-        for (index, node) in available_locations.iter() {
-            current_weight += node.location.weight;
-            if current_weight > sample {
-                let availability = available_indexes.get_mut(&index).unwrap();
-                *availability -= 1;
-                for zone in node.zones.iter() {
-                    if let Some(ref mut zone_rule) = zone_status.get_mut(zone) {
-                        zone_rule.ideal -= 1;
-                        zone_rule.minimum -= 1;
-                        if let Some(ref mut maximum) = zone_rule.maximum {
-                            *maximum -= 1;
-                        }
-                    }
-                }
-                return Ok((*index, node));
-            }
-        }
-        panic!("Invalid writer sample")
+            .collect::<Vec<_>>()
     }
 
-    async fn invalidate_index(&self, index: usize, err: ShardError) -> () {
-        let (nodes, _profile) = self.parent.0.as_ref();
-        let mut state = self.inner_state.lock().await;
-        state.failed_indexes.insert(index);
-        state.errors.push(err);
-        if let Some(node) = nodes.0.get(index) {
-            for zone in node.zones.iter() {
-                if let Some(ZoneRule {
-                    ref mut minimum, ..
-                }) = state.zone_status.0.get_mut(zone)
-                {
-                    *minimum += 1;
-                }
-                if let Some(ZoneRule {
-                    maximum: Some(ref mut maximum),
-                    ..
-                }) = state.zone_status.0.get_mut(zone)
-                {
-                    *maximum += 1;
+    pub(super) fn remove_availability(&mut self, index: usize, node: &ClusterNode) {
+        let ClusterWriterInnerState {
+            ref mut available_indexes,
+            zone_status: ZoneRules(ref mut zone_status),
+            ..
+        } = self;
+
+        let availability = available_indexes.get_mut(&index).unwrap();
+        *availability -= 1;
+        for zone in node.zones.iter() {
+            if let Some(ref mut zone_rule) = zone_status.get_mut(zone) {
+                zone_rule.ideal -= 1;
+                zone_rule.minimum -= 1;
+                if let Some(ref mut maximum) = zone_rule.maximum {
+                    *maximum -= 1;
                 }
             }
         }
