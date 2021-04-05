@@ -34,7 +34,7 @@ if len(sys.argv) > 1:
             known_hash = data.get("sha256")
             content_hash = hashlib.sha256(content).hexdigest()
             if known_hash != content_hash:
-                eprint("%s != %s" % (known_hash, content_hash))
+                print("%s != %s" % (known_hash, content_hash), file=sys.stderr)
 
             # Truncate the chunk if needed
             if length is not None:
