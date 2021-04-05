@@ -147,6 +147,11 @@ pub enum Command {
         /// File reference metadata file
         file: PathBuf,
     },
+    /// Given a file reference, show all chunk hashes
+    GetClusterHashes {
+        /// File reference metadata file
+        cluster: Location,
+    },
     /// List files in a cluster
     Ls {
         /// A reference to a cluster config file
@@ -316,6 +321,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 for location_with_hash in part.data.iter().chain(part.parity.iter()) {
                     println!("{}", location_with_hash.sha256);
                 }
+            }
+        },
+        Command::GetClusterHashes { cluster } => {
+            let cluster = Cluster::from_location(cluster).await?;
+            for hash in cluster.get_all_hashes().await?.drain() {
+                println!("{}", hash);
             }
         },
         Command::Ls {

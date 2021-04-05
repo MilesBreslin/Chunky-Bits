@@ -5,6 +5,7 @@ use std::{
         Path,
         PathBuf,
     },
+    collections::HashSet,
     sync::Arc,
 };
 
@@ -14,6 +15,7 @@ use futures::{
         FutureExt,
     },
     stream::{
+        self,
         FuturesUnordered,
         StreamExt,
     },
@@ -40,8 +42,11 @@ use crate::{
     },
     file::{
         self,
+        hash::Sha256Hash,
         CollectionDestination,
         FileReference,
+        HashWithLocation,
+        FilePart,
         Location,
     },
 };
@@ -115,6 +120,59 @@ impl Cluster {
         profile: impl Into<Option<&'a str>>,
     ) -> Option<&'_ ClusterProfile> {
         self.profiles.get(profile)
+    }
+
+    pub async fn get_all_hashes(&self) -> Result<HashSet<Sha256Hash>, MetadataReadError> {
+        let files: HashSet<PathBuf> = self
+            .list_files_recursive("/")
+            .await?
+            .into_iter()
+            .filter_map(|file_or_directory| match file_or_directory {
+                FileOrDirectory::File(path) => Some(path),
+                _ => None,
+            })
+            .collect();
+        let mut file_hashes = stream::iter(
+            files
+                .iter()
+                .map(|file|
+                    self.get_file_ref(file)
+                )
+            )
+            .buffered(10)
+            .flat_map(|file_result| {
+                let file_ref = match file_result {
+                    Ok(file_ref) => file_ref,
+                    Err(err) => {
+                        return stream::once(async move {
+                            Err(err)
+                        }).boxed();
+                    },
+                };
+                let FileReference{parts, ..} = file_ref;
+                stream::iter(
+                    parts.into_iter()
+                        .flat_map(|FilePart{data, parity, ..}|{
+                            data.into_iter()
+                                .chain(parity.into_iter())
+                                .map(|HashWithLocation{sha256, ..}| {
+                                    Ok(sha256)
+                                })
+                        })
+                ).boxed()
+            });
+        let mut out = HashSet::new();
+        while let Some(hash_result) = file_hashes.next().await {
+            match hash_result {
+                Ok(hash) => {
+                    out.insert(hash);
+                },
+                Err(err) => {
+                    return Err(err);
+                },
+            }
+        }
+        Ok(out)
     }
 
     pub async fn list_files(
