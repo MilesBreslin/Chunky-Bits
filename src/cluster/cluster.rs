@@ -1,11 +1,11 @@
 use std::{
+    collections::HashSet,
     convert::TryInto,
     num::NonZeroUsize,
     path::{
         Path,
         PathBuf,
     },
-    collections::HashSet,
     sync::Arc,
 };
 
@@ -44,9 +44,9 @@ use crate::{
         self,
         hash::Sha256Hash,
         CollectionDestination,
+        FilePart,
         FileReference,
         HashWithLocation,
-        FilePart,
         Location,
     },
 };
@@ -132,34 +132,22 @@ impl Cluster {
                 _ => None,
             })
             .collect();
-        let mut file_hashes = stream::iter(
-            files
-                .iter()
-                .map(|file|
-                    self.get_file_ref(file)
-                )
-            )
+        let mut file_hashes = stream::iter(files.iter().map(|file| self.get_file_ref(file)))
             .buffered(10)
             .flat_map(|file_result| {
                 let file_ref = match file_result {
                     Ok(file_ref) => file_ref,
                     Err(err) => {
-                        return stream::once(async move {
-                            Err(err)
-                        }).boxed();
+                        return stream::once(async move { Err(err) }).boxed();
                     },
                 };
-                let FileReference{parts, ..} = file_ref;
-                stream::iter(
-                    parts.into_iter()
-                        .flat_map(|FilePart{data, parity, ..}|{
-                            data.into_iter()
-                                .chain(parity.into_iter())
-                                .map(|HashWithLocation{sha256, ..}| {
-                                    Ok(sha256)
-                                })
-                        })
-                ).boxed()
+                let FileReference { parts, .. } = file_ref;
+                stream::iter(parts.into_iter().flat_map(|FilePart { data, parity, .. }| {
+                    data.into_iter()
+                        .chain(parity.into_iter())
+                        .map(|HashWithLocation { sha256, .. }| Ok(sha256))
+                }))
+                .boxed()
             });
         let mut out = HashSet::new();
         while let Some(hash_result) = file_hashes.next().await {
