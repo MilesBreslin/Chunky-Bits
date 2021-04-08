@@ -1,10 +1,6 @@
 use std::{
     fmt,
-    num::NonZeroUsize,
     sync::Arc,
-    marker::PhantomData,
-    borrow::BorrowMut,
-    borrow::Borrow,
 };
 
 use futures::{
@@ -52,8 +48,8 @@ use crate::{
         FilePart,
         HashWithLocation,
         Location,
-        VerifyPartReport,
         ResilverPartReport,
+        VerifyPartReport,
     },
 };
 
@@ -99,6 +95,7 @@ impl<D> FileReferenceBuilder<D> {
     {
         self.destination_arc(Arc::new(destination))
     }
+
     pub fn destination_arc<DN>(self, destination: Arc<DN>) -> FileReferenceBuilder<DN>
     where
         DN: CollectionDestination + Send + Sync + 'static,
@@ -108,21 +105,25 @@ impl<D> FileReferenceBuilder<D> {
             state: self.state,
         }
     }
+
     pub fn chunk_size(self, chunk_size: usize) -> Self {
         let mut new = self;
         new.state.chunk_size = chunk_size;
         new
     }
+
     pub fn data_chunks(self, chunks: usize) -> Self {
         let mut new = self;
         new.state.data = chunks;
         new
     }
+
     pub fn parity_chunks(self, chunks: usize) -> Self {
         let mut new = self;
         new.state.parity = chunks;
         new
     }
+
     pub fn concurrency(self, concurrency: usize) -> Self {
         let mut new = self;
         new.state.concurrency = concurrency;
@@ -134,7 +135,10 @@ impl<D> FileReferenceBuilder<D>
 where
     D: CollectionDestination + Send + Sync + 'static,
 {
-    pub async fn write(&self, reader: &mut (impl AsyncRead + Unpin)) -> Result<FileReference, FileWriteError> {
+    pub async fn write(
+        &self,
+        reader: &mut (impl AsyncRead + Unpin),
+    ) -> Result<FileReference, FileWriteError> {
         let destination = self.destination.clone();
         let FileReferenceBuilderState {
             chunk_size,
@@ -329,8 +333,9 @@ impl FileReference {
     }
 
     pub async fn verify(&self) -> VerifyFileReport<'_> {
-        VerifyFileReport{
-            part_reports: self.parts
+        VerifyFileReport {
+            part_reports: self
+                .parts
                 .iter()
                 .map(FilePart::verify)
                 .collect::<FuturesOrdered<_>>()
@@ -383,13 +388,17 @@ macro_rules! report_common {
                     .flat_map(|report| report.unhealthy_chunks())
             }
 
-            pub fn failed_read_chunks(&self) -> impl Iterator<Item = &HashWithLocation<Sha256Hash>> {
+            pub fn failed_read_chunks(
+                &self,
+            ) -> impl Iterator<Item = &HashWithLocation<Sha256Hash>> {
                 self.part_reports
                     .iter()
                     .flat_map(|report| report.failed_read_chunks())
             }
 
-            pub fn unavailable_locations(&self) -> impl Iterator<Item = (&Location, &LocationError)> {
+            pub fn unavailable_locations(
+                &self,
+            ) -> impl Iterator<Item = (&Location, &LocationError)> {
                 self.part_reports
                     .iter()
                     .flat_map(|report| report.unavailable_locations())
@@ -401,7 +410,7 @@ macro_rules! report_common {
                     .flat_map(|report| report.invalid_locations())
             }
         }
-    }
+    };
 }
 
 pub struct VerifyFileReport<'a> {

@@ -1,12 +1,10 @@
 use std::{
     collections::HashSet,
     convert::TryInto,
-    num::NonZeroUsize,
     path::{
         Path,
         PathBuf,
     },
-    sync::Arc,
 };
 
 use futures::{
@@ -41,7 +39,6 @@ use crate::{
         MetadataReadError,
     },
     file::{
-        self,
         hash::Sha256Hash,
         CollectionDestination,
         FilePart,
@@ -85,7 +82,8 @@ impl Cluster {
             .chunk_size((1 as usize) << profile.get_chunk_size())
             .data_chunks(profile.get_data_chunks())
             .parity_chunks(profile.get_parity_chunks())
-            .write(reader).await?;
+            .write(reader)
+            .await?;
         file_ref.content_type = content_type;
         self.metadata.write(path, &file_ref).await.unwrap();
         Ok(())

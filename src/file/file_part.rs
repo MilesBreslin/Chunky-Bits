@@ -35,8 +35,8 @@ use crate::{
     error::{
         FileReadError,
         FileWriteError,
-        ShardError,
         LocationError,
+        ShardError,
     },
     file::{
         hash::Sha256Hash,
@@ -218,7 +218,9 @@ impl FilePart {
     pub(crate) async fn verify(&self) -> VerifyPartReport<'_> {
         VerifyPartReport {
             file_part: self,
-            read_results: self.data.iter()
+            read_results: self
+                .data
+                .iter()
                 .chain(self.parity.iter())
                 .flat_map(|chunk| {
                     chunk.locations.iter().map(move |location| async move {
@@ -227,9 +229,7 @@ impl FilePart {
                                 let (_, hash) = Sha256Hash::from_vec_async(bytes).await;
                                 Ok(chunk.sha256.eq(&hash))
                             },
-                            Err(err) => {
-                                Err(err)
-                            },
+                            Err(err) => Err(err),
                         };
                         (chunk, location, result)
                     })
@@ -419,7 +419,9 @@ macro_rules! report_common {
                     .filter(move |chunk| !self.chunk_is_healthy(chunk))
             }
 
-            pub fn failed_read_chunks(&self) -> impl Iterator<Item = &HashWithLocation<Sha256Hash>> {
+            pub fn failed_read_chunks(
+                &self,
+            ) -> impl Iterator<Item = &HashWithLocation<Sha256Hash>> {
                 self.chunks().filter(move |chunk| {
                     self.read_results
                         .iter()
@@ -434,7 +436,9 @@ macro_rules! report_common {
                 })
             }
 
-            pub fn unavailable_locations(&self) -> impl Iterator<Item = (&Location, &LocationError)> {
+            pub fn unavailable_locations(
+                &self,
+            ) -> impl Iterator<Item = (&Location, &LocationError)> {
                 self.read_results
                     .iter()
                     .filter_map(|(_, location, result)| match result {
@@ -452,7 +456,7 @@ macro_rules! report_common {
                     })
             }
         }
-    }
+    };
 }
 
 impl VerifyPartReport<'_> {
@@ -467,9 +471,9 @@ impl VerifyPartReport<'_> {
                     .map(|valid| valid.then(|| read_chunk))
                     .flatten()
             });
-        read_ok_chunks
-            .any(|other_chunk| chunk as *const _ == *other_chunk as *const _)
+        read_ok_chunks.any(|other_chunk| chunk as *const _ == *other_chunk as *const _)
     }
+
     pub fn full_report(&self) -> impl fmt::Display + '_ {
         VerifyPartFullReport(&self)
     }

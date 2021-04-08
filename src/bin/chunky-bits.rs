@@ -8,7 +8,6 @@ use std::{
     net::SocketAddr,
     num::NonZeroUsize,
     path::PathBuf,
-    sync::Arc,
 };
 
 use chunky_bits::{
@@ -266,6 +265,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut f = File::open(&file).await?;
             let file_ref = file::FileReference::write_builder()
                 .destination(destination)
+                .chunk_size(1 << chunk_size)
                 .data_chunks(data)
                 .parity_chunks(parity)
                 .concurrency(concurrency.into())
