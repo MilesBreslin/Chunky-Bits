@@ -93,8 +93,10 @@ impl TestCluster {
     }
 
     fn default_reader() -> impl AsyncRead {
-        tokio_util::io::StreamReader::new(stream::iter((0..20).map(|i: u8| {
-            let bytes: VecDeque<u8> = ((0 as usize)..(1 << 10)).map(|_| i).collect();
+        tokio_util::io::StreamReader::new(stream::iter((0..80).map(|i: u8| {
+            let bytes: VecDeque<u8> = ((0 as usize)..(1 << 8))
+                .map(|x| (x % 128) as u8 + i)
+                .collect();
             Ok::<_, io::Error>(bytes)
         })))
     }
@@ -151,9 +153,8 @@ async fn test_resilver() -> Result<(), Box<dyn Error>> {
         .await?;
     let mut file_ref = cluster.get_file_ref("TESTFILE").await?;
     // File should be 100% Valid
-    assert!(file_ref.verify().await.into_iter().all(|part| part
-        .values()
-        .all(|integrity| Integrity::Valid.eq(integrity))));
+    assert!(file_ref.verify().await.is_ok());
+    let mut deleted_chunks: usize = 0;
     for part in file_ref.parts.iter_mut() {
         // Delete 1 / 3 data chunks
         let location_with_hash = part.data.first().unwrap();
@@ -166,19 +167,22 @@ async fn test_resilver() -> Result<(), Box<dyn Error>> {
         let location = location_with_hash.locations.first().unwrap();
         let _ = location.delete().await;
         assert!(location.read().await.is_err());
+
+        deleted_chunks += 2;
     }
     // File should not be 100% Valid
-    assert!(!file_ref.verify().await.into_iter().all(|part| part
-        .values()
-        .all(|integrity| Integrity::Valid.eq(integrity))));
-    let report = file_ref
+    let verify_report = file_ref.verify().await;
+    assert!(!verify_report.is_ok());
+    assert!(verify_report.is_available());
+    assert!(verify_report.unavailable_locations().count() == deleted_chunks);
+
+    let resilver_report = file_ref
         .resilver(Arc::new(cluster.get_destination(&profile).await))
         .await;
     // All of the parts should report no errors during resilver
-    assert!(report.iter().all(Result::is_ok));
-    // File should not be 100% Valid
-    assert!(!file_ref.verify().await.into_iter().all(|part| part
-        .values()
-        .all(|integrity| Integrity::Valid.eq(integrity))));
+    assert!(resilver_report.is_ok());
+    assert!(resilver_report.new_locations().count() == deleted_chunks);
+    // File should be 100% Valid
+    assert!(file_ref.verify().await.is_ok());
     Ok(())
 }

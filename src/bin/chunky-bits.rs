@@ -312,7 +312,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::VerifyFile { file } => {
             let file_reference: FileReference =
                 serde_yaml::from_reader(&std::fs::File::open(file)?)?;
-            println!("{}", serde_yaml::to_string(&file_reference.verify().await)?,);
+            let report = file_reference.verify().await;
+            println!("{}", report.full_report());
         },
         Command::GetHashes { file } => {
             let file_reference: FileReference =

@@ -111,7 +111,10 @@ impl Cluster {
         Ok(reader)
     }
 
-    pub async fn get_destination(&self, profile: &ClusterProfile) -> impl CollectionDestination {
+    pub async fn get_destination(
+        &self,
+        profile: &ClusterProfile,
+    ) -> impl CollectionDestination + Send + Sync {
         self.destinations.clone().with_profile(profile.clone())
     }
 
