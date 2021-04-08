@@ -2,6 +2,9 @@ use std::{
     fmt,
     num::NonZeroUsize,
     sync::Arc,
+    marker::PhantomData,
+    borrow::BorrowMut,
+    borrow::Borrow,
 };
 
 use futures::{
@@ -64,20 +67,81 @@ pub struct FileReference {
     pub parts: Vec<FilePart>,
 }
 
-impl FileReference {
-    pub async fn from_reader<R, D>(
-        reader: &mut R,
-        destination: Arc<D>,
-        chunksize: usize,
-        data: usize,
-        parity: usize,
-        concurrency: NonZeroUsize,
-    ) -> Result<Self, FileWriteError>
+#[derive(Clone)]
+pub struct FileReferenceBuilder<D> {
+    destination: Arc<D>,
+    state: FileReferenceBuilderState,
+}
+
+#[derive(Copy, Clone)]
+struct FileReferenceBuilderState {
+    chunk_size: usize,
+    data: usize,
+    parity: usize,
+    concurrency: usize,
+}
+
+impl Default for FileReferenceBuilderState {
+    fn default() -> Self {
+        FileReferenceBuilderState {
+            chunk_size: 1 << 20,
+            data: 3,
+            parity: 2,
+            concurrency: 10,
+        }
+    }
+}
+
+impl<D> FileReferenceBuilder<D> {
+    pub fn destination<DN>(self, destination: DN) -> FileReferenceBuilder<DN>
     where
-        R: AsyncRead + Unpin,
-        D: CollectionDestination + Send + Sync + 'static,
+        DN: CollectionDestination + Send + Sync + 'static,
     {
-        let concurrency: usize = concurrency.into();
+        self.destination_arc(Arc::new(destination))
+    }
+    pub fn destination_arc<DN>(self, destination: Arc<DN>) -> FileReferenceBuilder<DN>
+    where
+        DN: CollectionDestination + Send + Sync + 'static,
+    {
+        FileReferenceBuilder {
+            destination: destination,
+            state: self.state,
+        }
+    }
+    pub fn chunk_size(self, chunk_size: usize) -> Self {
+        let mut new = self;
+        new.state.chunk_size = chunk_size;
+        new
+    }
+    pub fn data_chunks(self, chunks: usize) -> Self {
+        let mut new = self;
+        new.state.data = chunks;
+        new
+    }
+    pub fn parity_chunks(self, chunks: usize) -> Self {
+        let mut new = self;
+        new.state.parity = chunks;
+        new
+    }
+    pub fn concurrency(self, concurrency: usize) -> Self {
+        let mut new = self;
+        new.state.concurrency = concurrency;
+        new
+    }
+}
+
+impl<D> FileReferenceBuilder<D>
+where
+    D: CollectionDestination + Send + Sync + 'static,
+{
+    pub async fn write(&self, reader: &mut (impl AsyncRead + Unpin)) -> Result<FileReference, FileWriteError> {
+        let destination = self.destination.clone();
+        let FileReferenceBuilderState {
+            chunk_size,
+            data,
+            parity,
+            concurrency,
+        } = self.state.clone();
         assert!(concurrency > 1);
 
         let encoder: Arc<ReedSolomon<galois_8::Field>> = Arc::new(ReedSolomon::new(data, parity)?);
@@ -139,7 +203,7 @@ impl FileReference {
                     },
                 };
 
-                let mut data_buf: Vec<u8> = vec![0; data * chunksize];
+                let mut data_buf: Vec<u8> = vec![0; data * chunk_size];
                 let mut bytes_read: usize = 0;
                 // read_exact, but handle end-of-file
                 {
@@ -228,6 +292,15 @@ impl FileReference {
             length: Some(total_bytes),
             parts: parts,
         })
+    }
+}
+
+impl FileReference {
+    pub fn write_builder() -> FileReferenceBuilder<()> {
+        FileReferenceBuilder {
+            destination: Arc::new(()),
+            state: Default::default(),
+        }
     }
 
     pub async fn to_writer<W>(&self, writer: &mut W) -> Result<(), FileReadError>

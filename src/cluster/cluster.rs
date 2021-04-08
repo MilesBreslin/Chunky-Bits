@@ -80,15 +80,12 @@ impl Cluster {
         R: AsyncRead + Unpin,
     {
         let destination = self.get_destination(profile).await;
-        let mut file_ref = file::FileReference::from_reader(
-            reader,
-            Arc::new(destination),
-            1 << profile.get_chunk_size(),
-            profile.get_data_chunks(),
-            profile.get_parity_chunks(),
-            NonZeroUsize::new(50).unwrap(),
-        )
-        .await?;
+        let mut file_ref = FileReference::write_builder()
+            .destination(destination)
+            .chunk_size((1 as usize) << profile.get_chunk_size())
+            .data_chunks(profile.get_data_chunks())
+            .parity_chunks(profile.get_parity_chunks())
+            .write(reader).await?;
         file_ref.content_type = content_type;
         self.metadata.write(path, &file_ref).await.unwrap();
         Ok(())

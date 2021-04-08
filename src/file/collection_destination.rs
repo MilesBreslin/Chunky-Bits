@@ -58,14 +58,13 @@ pub enum Compression {}
 pub enum Encryption {}
 
 /// Does not write anything. Just send the data to the void
-#[derive(Clone)]
-pub struct VoidDestination;
+pub type VoidDestination = ();
 
 impl CollectionDestination for VoidDestination {
     type Writer = VoidDestination;
 
     fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError> {
-        Ok(vec![VoidDestination; count])
+        Ok(vec![(); count])
     }
 }
 

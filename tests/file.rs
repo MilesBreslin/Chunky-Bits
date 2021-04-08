@@ -32,15 +32,12 @@ async fn test_file_write() -> Result<(), Box<dyn Error>> {
                 let length = (1 << 23) + 7;
                 let chunk_size = 1 << 20;
                 let mut reader = repeat(0).take(length);
-                let file_ref = FileReference::from_reader(
-                    &mut reader,
-                    Arc::new(VoidDestination),
-                    chunk_size,
-                    data,
-                    parity,
-                    NonZeroUsize::new(20).unwrap(),
-                )
-                .await?;
+                let file_ref = FileReference::write_builder()
+                    .chunk_size(chunk_size)
+                    .data_chunks(data)
+                    .parity_chunks(parity)
+                    .write(&mut reader)
+                    .await?;
                 assert_eq!(file_ref.length.unwrap(), length);
                 let part_size: u64 = (chunk_size as u64) * (data as u64);
                 assert_eq!(
@@ -70,15 +67,13 @@ async fn not_enough_writers() -> Result<(), Box<dyn Error>> {
             let length = 1;
             let chunk_size = 1 << 20;
             let mut reader = repeat(0).take(length);
-            let result = FileReference::from_reader(
-                &mut reader,
-                locations.clone(),
-                chunk_size,
-                data,
-                parity,
-                NonZeroUsize::new(20).unwrap(),
-            )
-            .await;
+            let result = FileReference::write_builder()
+                .destination_arc(locations.clone())
+                .chunk_size(chunk_size)
+                .data_chunks(data)
+                .parity_chunks(parity)
+                .write(&mut reader)
+                .await;
             if (data + parity) > locations.len() {
                 match result {
                     Err(FileWriteError::NotEnoughWriters) => {},

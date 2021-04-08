@@ -264,16 +264,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("Warning: Not enough destinations to distribute the data evenly");
             }
             let mut f = File::open(&file).await?;
-            let writer = Arc::new(destination);
-            let file_ref = file::FileReference::from_reader(
-                &mut f,
-                writer,
-                1 << chunk_size,
-                data,
-                parity,
-                concurrency,
-            )
-            .await?;
+            let file_ref = file::FileReference::write_builder()
+                .destination(destination)
+                .data_chunks(data)
+                .parity_chunks(parity)
+                .concurrency(concurrency.into())
+                .write(&mut f)
+                .await?;
             println!("{}", serde_yaml::to_string(&file_ref)?);
         },
         Command::DecodeShards {
