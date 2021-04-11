@@ -21,7 +21,10 @@ use chunky_bits::{
         ClusterError,
         FileWriteError,
     },
-    file::Location,
+    file::{
+        FileReference,
+        Location,
+    },
 };
 use futures::stream;
 use tempfile::{
@@ -181,5 +184,25 @@ async fn test_resilver() -> Result<(), Box<dyn Error>> {
     assert!(resilver_report.new_locations().count() == deleted_chunks);
     // File should be 100% Valid
     assert!(file_ref.verify().await.is_ok());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_profiler() -> Result<(), Box<dyn Error>> {
+    let cluster = TestCluster::new().await?;
+    let mut reader = TestCluster::default_reader();
+    let profile = cluster.get_profile(None).unwrap().clone();
+    let (reporter, destination) = cluster.get_destination_with_profiler(&profile);
+    FileReference::write_builder()
+        .destination(destination)
+        .data_chunks(2)
+        .parity_chunks(1)
+        .write(&mut reader)
+        .await?;
+    let report = reporter.profile().await;
+    let average_duration = report.average_write_duration().unwrap();
+    assert!(average_duration.as_nanos() > 0);
+    assert!(average_duration.as_millis() < 1000);
+    assert!(report.average_read_duration() == None);
     Ok(())
 }

@@ -3,7 +3,10 @@ use serde::{
     Serialize,
 };
 
-use crate::file::LocationContext;
+use crate::file::{
+    LocationContext,
+    LocationContextBuilder,
+};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(from = "TunablesInner")]
@@ -21,18 +24,8 @@ impl AsRef<LocationContext> for Tunables {
 
 impl From<TunablesInner> for Tunables {
     fn from(inner: TunablesInner) -> Self {
-        let ref inner_ref = inner;
-        let http_client = {
-            let mut builder = reqwest::Client::builder();
-            builder = builder.https_only(inner_ref.https_only);
-            if let Some(user_agent) = &inner_ref.user_agent {
-                builder = builder.user_agent(user_agent.clone())
-            }
-            builder.build().unwrap()
-        };
-        let location_context = LocationContext::builder().http_client(http_client).build();
         Tunables {
-            location_context,
+            location_context: inner.generate_location_context_builder().build(),
             inner,
         }
     }
@@ -47,6 +40,12 @@ impl From<Tunables> for TunablesInner {
 impl Default for Tunables {
     fn default() -> Self {
         TunablesInner::default().into()
+    }
+}
+
+impl Tunables {
+    pub(super) fn generate_location_context_builder(&self) -> LocationContextBuilder {
+        self.inner.generate_location_context_builder()
     }
 }
 
@@ -81,5 +80,19 @@ impl Default for TunablesInner {
             https_only: false,
             user_agent: None,
         }
+    }
+}
+
+impl TunablesInner {
+    fn generate_location_context_builder(&self) -> LocationContextBuilder {
+        let http_client = {
+            let mut builder = reqwest::Client::builder();
+            builder = builder.https_only(self.https_only);
+            if let Some(user_agent) = &self.user_agent {
+                builder = builder.user_agent(user_agent.clone())
+            }
+            builder.build().unwrap()
+        };
+        LocationContext::builder().http_client(http_client)
     }
 }

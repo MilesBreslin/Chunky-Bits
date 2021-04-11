@@ -43,11 +43,13 @@ use crate::{
     },
     file::{
         hash::AnyHash,
+        new_profiler,
         Chunk,
         CollectionDestination,
         FilePart,
         FileReference,
         Location,
+        ProfileReporter,
     },
 };
 
@@ -122,6 +124,26 @@ impl Cluster {
             location_context: self.tunables.as_ref().clone(),
             profile: profile.clone(),
         })
+    }
+
+    pub fn get_destination_with_profiler(
+        &self,
+        profile: &ClusterProfile,
+    ) -> (ProfileReporter, impl CollectionDestination + Send + Sync) {
+        let (profiler, reporter) = new_profiler();
+        let location_context = self
+            .tunables
+            .generate_location_context_builder()
+            .profiler(profiler)
+            .build();
+        (
+            reporter,
+            DestinationContainer::from(DestinationInner {
+                nodes: self.destinations.clone(),
+                location_context,
+                profile: profile.clone(),
+            }),
+        )
     }
 
     pub fn get_profile<'a>(

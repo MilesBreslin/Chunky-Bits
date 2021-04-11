@@ -21,6 +21,7 @@ use tokio::{
         File,
     },
     io::AsyncWriteExt,
+    time::Instant,
 };
 use url::Url;
 
@@ -30,7 +31,10 @@ use crate::{
         LocationParseError,
         ShardError,
     },
-    file::ShardWriter,
+    file::{
+        profiler::Profiler,
+        ShardWriter,
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -66,18 +70,34 @@ impl Location {
     }
 
     pub async fn read_with_context(&self, cx: &LocationContext) -> Result<Vec<u8>, LocationError> {
-        let LocationContext { http_client, .. } = cx;
+        let LocationContext {
+            http_client,
+            profiler,
+            ..
+        } = cx;
+        let profiler = profiler.as_ref();
+        let op_start = profiler.map(|_| Instant::now());
+
         use Location::*;
-        match self {
+        let result: Result<Vec<u8>, LocationError> = match self {
             Local(path) => match fs::read(&path).await {
                 Ok(bytes) => Ok(bytes),
                 Err(err) => Err(err.into()),
             },
             Http(url) => match http_client.get(Into::<Url>::into(url.clone())).send().await {
-                Ok(resp) => Ok(resp.bytes().await?.into_iter().collect()),
+                Ok(resp) => match resp.bytes().await {
+                    Ok(bytes) => Ok(bytes.into_iter().collect()),
+                    Err(err) => Err(err.into()),
+                },
                 Err(err) => Err(err.into()),
             },
+        };
+
+        if let Some(op_start) = op_start {
+            let profiler = profiler.unwrap();
+            profiler.log_read(&result, self.clone(), op_start);
         }
+        result
     }
 
     pub async fn write_with_context<T>(
@@ -88,9 +108,17 @@ impl Location {
     where
         T: AsRef<[u8]> + Into<Vec<u8>>,
     {
-        let LocationContext { http_client, .. } = cx;
+        let LocationContext {
+            http_client,
+            profiler,
+            ..
+        } = cx;
+        let profiler = profiler.as_ref();
+        let op_start = profiler.map(|_| Instant::now());
+        let length = bytes.as_ref().len();
+
         use Location::*;
-        match self {
+        let result: Result<(), LocationError> = match self {
             Local(path) => {
                 File::create(&path).await?.write_all(bytes.as_ref()).await?;
                 Ok(())
@@ -104,7 +132,13 @@ impl Location {
                 response?;
                 Ok(())
             },
+        };
+
+        if let Some(op_start) = op_start {
+            let profiler = profiler.unwrap();
+            profiler.log_write(&result, self.clone(), length, op_start);
         }
+        result
     }
 
     pub async fn write_subfile_with_context<T>(
@@ -187,9 +221,10 @@ impl Location {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LocationContext {
     http_client: reqwest::Client,
+    profiler: Option<Profiler>,
 }
 
 impl Default for LocationContext {
@@ -210,18 +245,28 @@ impl LocationContext {
 #[derive(Default)]
 pub struct LocationContextBuilder {
     http_client: Option<reqwest::Client>,
+    profiler: Option<Profiler>,
 }
 
 impl LocationContextBuilder {
     pub fn http_client(self, http_client: reqwest::Client) -> Self {
         LocationContextBuilder {
             http_client: Some(http_client),
+            profiler: self.profiler,
+        }
+    }
+
+    pub fn profiler(self, profiler: Profiler) -> Self {
+        LocationContextBuilder {
+            http_client: self.http_client,
+            profiler: Some(profiler),
         }
     }
 
     pub fn build(self) -> LocationContext {
         LocationContext {
             http_client: self.http_client.unwrap_or_else(reqwest::Client::new),
+            profiler: self.profiler,
         }
     }
 }
