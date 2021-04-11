@@ -214,7 +214,12 @@ pub struct LocationContextBuilder {
 }
 
 impl LocationContextBuilder {
-    fn build(self) -> LocationContext {
+    pub fn http_client(self, http_client: reqwest::Client) -> Self {
+        LocationContextBuilder {
+            http_client: Some(http_client),
+        }
+    }
+    pub fn build(self) -> LocationContext {
         LocationContext {
             http_client: self.http_client.unwrap_or_else(reqwest::Client::new),
         }
