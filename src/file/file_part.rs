@@ -40,9 +40,9 @@ use crate::{
     },
     file::{
         hash::Sha256Hash,
+        Chunk,
         CollectionDestination,
         Encryption,
-        HashWithLocation,
         Location,
         ShardWriter,
     },
@@ -54,9 +54,9 @@ pub struct FilePart {
     pub encryption: Option<Encryption>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunksize: Option<usize>,
-    pub data: Vec<HashWithLocation<Sha256Hash>>,
+    pub data: Vec<Chunk<Sha256Hash>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub parity: Vec<HashWithLocation<Sha256Hash>>,
+    pub parity: Vec<Chunk<Sha256Hash>>,
 }
 
 impl FilePart {
@@ -172,7 +172,7 @@ impl FilePart {
                     let hash = Sha256Hash::from_buf(&data);
                     let locations = writer.write_shard(&format!("{}", hash), &data).await;
                     match locations {
-                        Ok(locations) => Some(HashWithLocation {
+                        Ok(locations) => Some(Chunk {
                             sha256: hash,
                             locations,
                         }),
@@ -257,7 +257,7 @@ impl FilePart {
             .iter()
             .chain(parity.iter())
             .map(|chunk| async move {
-                let HashWithLocation {
+                let Chunk {
                     ref locations,
                     ref sha256,
                 } = chunk;
@@ -384,7 +384,7 @@ impl fmt::Display for Integrity {
 pub struct VerifyPartReport<'a> {
     file_part: &'a FilePart,
     read_results: Vec<(
-        &'a HashWithLocation<Sha256Hash>,
+        &'a Chunk<Sha256Hash>,
         &'a Location,
         Result<bool, LocationError>,
     )>,
@@ -402,26 +402,24 @@ macro_rules! report_common {
                 self.healthy_chunks().count() >= self.file_part.data.len()
             }
 
-            pub fn chunks(&self) -> impl Iterator<Item = &HashWithLocation<Sha256Hash>> {
+            pub fn chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
                 self.file_part
                     .data
                     .iter()
                     .chain(self.file_part.parity.iter())
             }
 
-            pub fn healthy_chunks(&self) -> impl Iterator<Item = &HashWithLocation<Sha256Hash>> {
+            pub fn healthy_chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
                 self.chunks()
                     .filter(move |chunk| self.chunk_is_healthy(chunk))
             }
 
-            pub fn unhealthy_chunks(&self) -> impl Iterator<Item = &HashWithLocation<Sha256Hash>> {
+            pub fn unhealthy_chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
                 self.chunks()
                     .filter(move |chunk| !self.chunk_is_healthy(chunk))
             }
 
-            pub fn failed_read_chunks(
-                &self,
-            ) -> impl Iterator<Item = &HashWithLocation<Sha256Hash>> {
+            pub fn failed_read_chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
                 self.chunks().filter(move |chunk| {
                     self.read_results
                         .iter()
@@ -460,7 +458,7 @@ macro_rules! report_common {
 }
 
 impl VerifyPartReport<'_> {
-    fn chunk_is_healthy(&self, chunk: &HashWithLocation<Sha256Hash>) -> bool {
+    fn chunk_is_healthy(&self, chunk: &Chunk<Sha256Hash>) -> bool {
         let mut read_ok_chunks = self
             .read_results
             .iter()
@@ -505,11 +503,11 @@ pub struct ResilverPartReport<'a> {
     file_part: &'a FilePart,
     write_error: Result<(), FileWriteError>,
     write_results: Vec<(
-        &'a HashWithLocation<Sha256Hash>,
+        &'a Chunk<Sha256Hash>,
         Result<Vec<&'a Location>, FileWriteError>,
     )>,
     read_results: Vec<(
-        &'a HashWithLocation<Sha256Hash>,
+        &'a Chunk<Sha256Hash>,
         &'a Location,
         Result<bool, LocationError>,
     )>,
@@ -566,7 +564,7 @@ impl<'a> ResilverPartReport<'a> {
             })
     }
 
-    fn chunk_is_healthy(&self, chunk: &HashWithLocation<Sha256Hash>) -> bool {
+    fn chunk_is_healthy(&self, chunk: &Chunk<Sha256Hash>) -> bool {
         let write_ok_chunks = self
             .write_results
             .iter()

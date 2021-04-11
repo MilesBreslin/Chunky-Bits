@@ -180,12 +180,6 @@ impl FromStr for Location {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct HashWithLocation<T: Serialize + Clone + PartialEq + Eq + Hash + PartialOrd + Ord> {
-    pub sha256: T,
-    pub locations: Vec<Location>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Url")]
 #[serde(into = "Url")]
 pub struct HttpUrl(Url);

@@ -1,6 +1,5 @@
 use std::{
     error::Error,
-    num::NonZeroUsize,
     sync::Arc,
 };
 
@@ -9,7 +8,6 @@ use chunky_bits::{
     file::{
         FileReference,
         Location,
-        VoidDestination,
         WeightedLocation,
     },
 };

@@ -1,3 +1,5 @@
+mod chunk;
+pub use chunk::*;
 mod file_reference;
 pub use file_reference::*;
 mod file_part;

@@ -21,10 +21,7 @@ use chunky_bits::{
         ClusterError,
         FileWriteError,
     },
-    file::{
-        Integrity,
-        Location,
-    },
+    file::Location,
 };
 use futures::stream;
 use tempfile::{

@@ -40,10 +40,10 @@ use crate::{
     },
     file::{
         hash::Sha256Hash,
+        Chunk,
         CollectionDestination,
         FilePart,
         FileReference,
-        HashWithLocation,
         Location,
     },
 };
@@ -143,7 +143,7 @@ impl Cluster {
                 stream::iter(parts.into_iter().flat_map(|FilePart { data, parity, .. }| {
                     data.into_iter()
                         .chain(parity.into_iter())
-                        .map(|HashWithLocation { sha256, .. }| Ok(sha256))
+                        .map(|Chunk { sha256, .. }| Ok(sha256))
                 }))
                 .boxed()
             });
