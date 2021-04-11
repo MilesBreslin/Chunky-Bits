@@ -36,12 +36,12 @@ parts:
   - data:
       - sha256: 4d589118cd5b236df24f79f951df8c4907098b19e25f45ffea3882d6ddcc2f37
         locations:
-          - tmpdir/repo4/4d589118cd5b236df24f79f951df8c4907098b19e25f45ffea3882d6ddcc2f37
+          - /mnt/repo4/4d589118cd5b236df24f79f951df8c4907098b19e25f45ffea3882d6ddcc2f37
       - ...
     parity:
       - sha256: 1b9acb5b2436dfa1cff8bb0ad39b317c14c8d07214a5a437275d617352ded59b
         locations:
-          - tmpdir/repo4/1b9acb5b2436dfa1cff8bb0ad39b317c14c8d07214a5a437275d617352ded59b
+          - https://node2.chunky-bits.local/1b9acb5b2436dfa1cff8bb0ad39b317c14c8d07214a5a437275d617352ded59b
       - ...
   - ...
 ```
