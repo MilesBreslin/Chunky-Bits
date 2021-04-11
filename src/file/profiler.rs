@@ -1,3 +1,5 @@
+use std::fmt;
+
 use tokio::{
     select,
     sync::{
@@ -12,18 +14,16 @@ use tokio::{
 
 use crate::{
     error::LocationError,
-    file::{
-        Location,
-    },
+    file::Location,
 };
 
 pub struct ProfileReporter {
-    report: oneshot::Receiver<Profile>,
+    report: oneshot::Receiver<ProfileReport>,
     quit: oneshot::Sender<()>,
 }
 
 impl ProfileReporter {
-    pub async fn profile(self) -> Profile {
+    pub async fn profile(self) -> ProfileReport {
         let ProfileReporter { report, quit } = self;
         drop(quit);
         report.await.unwrap()
@@ -32,10 +32,10 @@ impl ProfileReporter {
 
 pub fn new_profiler() -> (Profiler, ProfileReporter) {
     let (log_tx, mut log_rx) = mpsc::unbounded_channel::<ResultLog>();
-    let (profile_tx, profile_rx) = oneshot::channel::<Profile>();
+    let (profile_tx, profile_rx) = oneshot::channel::<ProfileReport>();
     let (drop_tx, mut drop_rx) = oneshot::channel::<()>();
     tokio::spawn(async move {
-        let mut profile = Profile(vec![]);
+        let mut profile = ProfileReport(vec![]);
         loop {
             select! {
                 _ = &mut drop_rx => {
@@ -237,9 +237,22 @@ impl Profiler {
     }
 }
 
-pub struct Profile(Vec<ResultLog>);
+pub struct ProfileReport(Vec<ResultLog>);
 
-impl Profile {
+impl fmt::Display for ProfileReport {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "ReadAvg<{:?}ms> WriteAvg<{:?}ms> Total<{:?}ms> Total<{}B>",
+            self.average_read_duration().map(|d| d.as_millis()),
+            self.average_write_duration().map(|d| d.as_millis()),
+            self.total_time().map(|d| d.as_millis()),
+            self.total_bytes(),
+        )
+    }
+}
+
+impl ProfileReport {
     pub fn average_read_duration(&self) -> Option<Duration> {
         let writes = self.reads();
         let durations = Self::duration(writes);
@@ -250,6 +263,28 @@ impl Profile {
         let writes = self.writes();
         let durations = Self::duration(writes);
         Self::average_duration(durations)
+    }
+
+    pub fn start_time(&self) -> Option<Instant> {
+        self.0.first().map(|res| *res.start_time())
+    }
+
+    pub fn end_time(&self) -> Option<Instant> {
+        self.0.last().map(|res| *res.end_time())
+    }
+
+    pub fn total_time(&self) -> Option<Duration> {
+        if let (Some(start), Some(end)) = (self.start_time(), self.end_time()) {
+            Some(end.duration_since(start))
+        } else {
+            None
+        }
+    }
+
+    pub fn total_bytes(&self) -> usize {
+        Self::success(self.0.iter())
+            .map(|res| res.length().unwrap())
+            .sum()
     }
 
     fn average_duration(mut durations: impl Iterator<Item = Duration>) -> Option<Duration> {
@@ -269,6 +304,13 @@ impl Profile {
         iter: impl Iterator<Item = &'a (impl GeneralResult + 'static)> + 'a,
     ) -> impl Iterator<Item = Duration> + 'a {
         iter.map(move |res| res.duration())
+    }
+
+    fn success<'a, T>(iter: impl Iterator<Item = &'a T> + 'a) -> impl Iterator<Item = &'a T> + 'a
+    where
+        T: GeneralResult + 'static,
+    {
+        iter.filter(|res| res.error().is_ok())
     }
 
     fn writes(&self) -> impl Iterator<Item = &WriteResult> {

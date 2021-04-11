@@ -49,6 +49,7 @@ use crate::{
         FilePart,
         FileReference,
         Location,
+        ProfileReport,
         ProfileReporter,
     },
 };
@@ -96,6 +97,34 @@ impl Cluster {
         file_ref.content_type = content_type;
         self.metadata.write(path, &file_ref).await.unwrap();
         Ok(())
+    }
+
+    pub async fn write_file_with_report<R>(
+        &self,
+        path: impl AsRef<Path>,
+        reader: &mut R,
+        profile: &ClusterProfile,
+        content_type: Option<String>,
+    ) -> (ProfileReport, Result<(), ClusterError>)
+    where
+        R: AsyncRead + Unpin,
+    {
+        let (reporter, destination) = self.get_destination_with_profiler(profile);
+        let result = FileReference::write_builder()
+            .destination(destination)
+            .chunk_size((1 as usize) << profile.get_chunk_size())
+            .data_chunks(profile.get_data_chunks())
+            .parity_chunks(profile.get_parity_chunks())
+            .write(reader)
+            .await;
+        match result {
+            Ok(mut file_ref) => {
+                file_ref.content_type = content_type;
+                self.metadata.write(path, &file_ref).await.unwrap();
+                (reporter.profile().await, Ok(()))
+            },
+            Err(err) => (reporter.profile().await, Err(err.into())),
+        }
     }
 
     pub async fn get_file_ref(

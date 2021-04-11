@@ -74,6 +74,9 @@ pub enum Command {
     },
     /// Put a file in the cluster
     Put {
+        /// Enable the profiler
+        #[structopt(long)]
+        performance_profiler: bool,
         /// A reference to a cluster config file
         #[structopt(short, long)]
         cluster: Location,
@@ -219,6 +222,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             cluster,
             filename,
             profile,
+            performance_profiler,
         } => {
             let cluster = Cluster::from_location(cluster)
                 .await
@@ -233,14 +237,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Some(filename) => filename,
                 None => file,
             };
-            cluster
-                .write_file(
-                    &format!("{}", output_name.display()),
-                    &mut f,
-                    cluster_profile,
-                    None,
-                )
-                .await?;
+            if performance_profiler {
+                let (profile, result) = cluster
+                    .write_file_with_report(
+                        &format!("{}", output_name.display()),
+                        &mut f,
+                        cluster_profile,
+                        None,
+                    )
+                    .await;
+                println!("{}", profile);
+                result?;
+            } else {
+                cluster
+                    .write_file(
+                        &format!("{}", output_name.display()),
+                        &mut f,
+                        cluster_profile,
+                        None,
+                    )
+                    .await?;
+            }
         },
         Command::ClusterInfo { cluster } => {
             let cluster = Cluster::from_location(cluster)
