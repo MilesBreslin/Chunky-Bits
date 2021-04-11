@@ -39,7 +39,11 @@ use crate::{
         ShardError,
     },
     file::{
-        hash::Sha256Hash,
+        hash::{
+            DataHasher,
+            DataVerifier,
+            Sha256Hash,
+        },
         Chunk,
         CollectionDestination,
         Encryption,
@@ -54,9 +58,9 @@ pub struct FilePart {
     pub encryption: Option<Encryption>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunksize: Option<usize>,
-    pub data: Vec<Chunk<Sha256Hash>>,
+    pub data: Vec<Chunk>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub parity: Vec<Chunk<Sha256Hash>>,
+    pub parity: Vec<Chunk>,
 }
 
 impl FilePart {
@@ -86,8 +90,8 @@ impl FilePart {
                         drop(all_chunks);
                         for location in chunk.locations.drain(..) {
                             if let Ok(data) = location.read().await {
-                                let (data, hash) = Sha256Hash::from_vec_async(data).await;
-                                if hash == chunk.sha256 {
+                                let (equality, data) = chunk.hash.verify_async(data).await.unwrap();
+                                if equality {
                                     return Some((index, data));
                                 }
                             }
@@ -173,7 +177,7 @@ impl FilePart {
                     let locations = writer.write_shard(&format!("{}", hash), &data).await;
                     match locations {
                         Ok(locations) => Some(Chunk {
-                            sha256: hash,
+                            hash: hash.into(),
                             locations,
                         }),
                         Err(err) => {
@@ -226,8 +230,8 @@ impl FilePart {
                     chunk.locations.iter().map(move |location| async move {
                         let result = match location.read().await {
                             Ok(bytes) => {
-                                let (_, hash) = Sha256Hash::from_vec_async(bytes).await;
-                                Ok(chunk.sha256.eq(&hash))
+                                let (equality, _) = chunk.hash.verify_async(bytes).await.unwrap();
+                                Ok(equality)
                             },
                             Err(err) => Err(err),
                         };
@@ -259,7 +263,7 @@ impl FilePart {
             .map(|chunk| async move {
                 let Chunk {
                     ref locations,
-                    ref sha256,
+                    ref hash,
                 } = chunk;
 
                 let mut locations_report = Vec::with_capacity(locations.len());
@@ -267,8 +271,8 @@ impl FilePart {
                 for location in locations.iter() {
                     locations_report.push(match location.read().await {
                         Ok(bytes) => {
-                            let local_hash = Sha256Hash::from_buf_async(&bytes).await;
-                            let equality = local_hash.eq(sha256);
+                            let (local_hash, bytes) = hash.from_buf_async(bytes).await.unwrap();
+                            let equality = local_hash.eq(hash);
                             if equality {
                                 chunk_bytes.get_or_insert(bytes);
                             }
@@ -318,7 +322,7 @@ impl FilePart {
                     for (chunk, bytes) in iter_mut {
                         let mut writer = writers.pop().unwrap();
                         if let Some(bytes) = bytes {
-                            let hash = format!("{}", chunk.sha256);
+                            let hash = format!("{}", chunk.hash);
                             match writer.write_shard(&hash, &bytes).await {
                                 Ok(locations) => {
                                     inner_write_results.push(Ok(locations.len()));
@@ -383,11 +387,7 @@ impl fmt::Display for Integrity {
 
 pub struct VerifyPartReport<'a> {
     file_part: &'a FilePart,
-    read_results: Vec<(
-        &'a Chunk<Sha256Hash>,
-        &'a Location,
-        Result<bool, LocationError>,
-    )>,
+    read_results: Vec<(&'a Chunk, &'a Location, Result<bool, LocationError>)>,
 }
 
 macro_rules! report_common {
@@ -402,24 +402,24 @@ macro_rules! report_common {
                 self.healthy_chunks().count() >= self.file_part.data.len()
             }
 
-            pub fn chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
+            pub fn chunks(&self) -> impl Iterator<Item = &Chunk> {
                 self.file_part
                     .data
                     .iter()
                     .chain(self.file_part.parity.iter())
             }
 
-            pub fn healthy_chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
+            pub fn healthy_chunks(&self) -> impl Iterator<Item = &Chunk> {
                 self.chunks()
                     .filter(move |chunk| self.chunk_is_healthy(chunk))
             }
 
-            pub fn unhealthy_chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
+            pub fn unhealthy_chunks(&self) -> impl Iterator<Item = &Chunk> {
                 self.chunks()
                     .filter(move |chunk| !self.chunk_is_healthy(chunk))
             }
 
-            pub fn failed_read_chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
+            pub fn failed_read_chunks(&self) -> impl Iterator<Item = &Chunk> {
                 self.chunks().filter(move |chunk| {
                     self.read_results
                         .iter()
@@ -458,7 +458,7 @@ macro_rules! report_common {
 }
 
 impl VerifyPartReport<'_> {
-    fn chunk_is_healthy(&self, chunk: &Chunk<Sha256Hash>) -> bool {
+    fn chunk_is_healthy(&self, chunk: &Chunk) -> bool {
         let mut read_ok_chunks = self
             .read_results
             .iter()
@@ -489,7 +489,7 @@ impl fmt::Display for VerifyPartFullReport<'_> {
                 Ok(false) => Integrity::Invalid,
                 Err(_) => Integrity::Unavailable,
             };
-            write!(f, "{:11} {:64} {}", integrity, chunk.sha256, location)?;
+            write!(f, "{:11} {:64} {}", integrity, chunk.hash, location)?;
             if let Err(err) = result {
                 write!(f, " {}", err)?;
             }
@@ -502,15 +502,8 @@ impl fmt::Display for VerifyPartFullReport<'_> {
 pub struct ResilverPartReport<'a> {
     file_part: &'a FilePart,
     write_error: Result<(), FileWriteError>,
-    write_results: Vec<(
-        &'a Chunk<Sha256Hash>,
-        Result<Vec<&'a Location>, FileWriteError>,
-    )>,
-    read_results: Vec<(
-        &'a Chunk<Sha256Hash>,
-        &'a Location,
-        Result<bool, LocationError>,
-    )>,
+    write_results: Vec<(&'a Chunk, Result<Vec<&'a Location>, FileWriteError>)>,
+    read_results: Vec<(&'a Chunk, &'a Location, Result<bool, LocationError>)>,
 }
 
 impl fmt::Display for ResilverPartReport<'_> {
@@ -564,7 +557,7 @@ impl<'a> ResilverPartReport<'a> {
             })
     }
 
-    fn chunk_is_healthy(&self, chunk: &Chunk<Sha256Hash>) -> bool {
+    fn chunk_is_healthy(&self, chunk: &Chunk) -> bool {
         let write_ok_chunks = self
             .write_results
             .iter()

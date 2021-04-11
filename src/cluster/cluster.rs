@@ -39,7 +39,7 @@ use crate::{
         MetadataReadError,
     },
     file::{
-        hash::Sha256Hash,
+        hash::AnyHash,
         Chunk,
         CollectionDestination,
         FilePart,
@@ -120,7 +120,7 @@ impl Cluster {
         self.profiles.get(profile)
     }
 
-    pub async fn get_all_hashes(&self) -> Result<HashSet<Sha256Hash>, MetadataReadError> {
+    pub async fn get_all_hashes(&self) -> Result<HashSet<AnyHash>, MetadataReadError> {
         let files: HashSet<PathBuf> = self
             .list_files_recursive("/")
             .await?
@@ -143,7 +143,7 @@ impl Cluster {
                 stream::iter(parts.into_iter().flat_map(|FilePart { data, parity, .. }| {
                     data.into_iter()
                         .chain(parity.into_iter())
-                        .map(|Chunk { sha256, .. }| Ok(sha256))
+                        .map(|Chunk { hash, .. }| Ok(hash))
                 }))
                 .boxed()
             });

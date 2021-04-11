@@ -42,7 +42,6 @@ use crate::{
         LocationError,
     },
     file::{
-        hash::Sha256Hash,
         Chunk,
         CollectionDestination,
         Compression,
@@ -372,23 +371,23 @@ macro_rules! report_common {
                 self.part_reports.iter().all(|report| report.is_available())
             }
 
-            pub fn chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
+            pub fn chunks(&self) -> impl Iterator<Item = &Chunk> {
                 self.part_reports.iter().flat_map(|report| report.chunks())
             }
 
-            pub fn healthy_chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
+            pub fn healthy_chunks(&self) -> impl Iterator<Item = &Chunk> {
                 self.part_reports
                     .iter()
                     .flat_map(|report| report.healthy_chunks())
             }
 
-            pub fn unhealthy_chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
+            pub fn unhealthy_chunks(&self) -> impl Iterator<Item = &Chunk> {
                 self.part_reports
                     .iter()
                     .flat_map(|report| report.unhealthy_chunks())
             }
 
-            pub fn failed_read_chunks(&self) -> impl Iterator<Item = &Chunk<Sha256Hash>> {
+            pub fn failed_read_chunks(&self) -> impl Iterator<Item = &Chunk> {
                 self.part_reports
                     .iter()
                     .flat_map(|report| report.failed_read_chunks())

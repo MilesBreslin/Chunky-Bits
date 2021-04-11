@@ -317,7 +317,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 serde_yaml::from_reader(&std::fs::File::open(file)?)?;
             for part in &file_reference.parts {
                 for location_with_hash in part.data.iter().chain(part.parity.iter()) {
-                    println!("{}", location_with_hash.sha256);
+                    println!("{}", location_with_hash.hash);
                 }
             }
         },

@@ -5,10 +5,14 @@ use serde::{
     Serialize,
 };
 
-use crate::file::Location;
+use crate::file::{
+    hash::AnyHash,
+    Location,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Chunk<T: Serialize + Clone + PartialEq + Eq + Hash + PartialOrd + Ord> {
-    pub sha256: T,
+pub struct Chunk {
+    #[serde(flatten)]
+    pub hash: AnyHash,
     pub locations: Vec<Location>,
 }
