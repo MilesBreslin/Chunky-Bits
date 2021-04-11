@@ -7,7 +7,6 @@ use std::{
         PathBuf,
     },
     str::FromStr,
-    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -43,14 +42,14 @@ pub enum Location {
 
 impl Location {
     pub async fn read(&self) -> Result<Vec<u8>, LocationError> {
-        self.read_with_context(Self::default_context()).await
+        self.read_with_context(&Self::default_context()).await
     }
 
     pub async fn write<T>(&self, bytes: T) -> Result<(), LocationError>
     where
         T: AsRef<[u8]> + Into<Vec<u8>>,
     {
-        self.write_with_context(Self::default_context(), bytes)
+        self.write_with_context(&Self::default_context(), bytes)
             .await
     }
 
@@ -58,19 +57,16 @@ impl Location {
     where
         T: AsRef<[u8]> + Into<Vec<u8>>,
     {
-        self.write_subfile_with_context(Self::default_context(), name, bytes)
+        self.write_subfile_with_context(&Self::default_context(), name, bytes)
             .await
     }
 
     pub async fn delete(&self) -> Result<(), LocationError> {
-        self.delete_with_context(Self::default_context()).await
+        self.delete_with_context(&Self::default_context()).await
     }
 
-    pub async fn read_with_context(
-        &self,
-        cx: impl AsRef<LocationContext>,
-    ) -> Result<Vec<u8>, LocationError> {
-        let LocationContext { http_client, .. } = cx.as_ref();
+    pub async fn read_with_context(&self, cx: &LocationContext) -> Result<Vec<u8>, LocationError> {
+        let LocationContext { http_client, .. } = cx;
         use Location::*;
         match self {
             Local(path) => match fs::read(&path).await {
@@ -86,13 +82,13 @@ impl Location {
 
     pub async fn write_with_context<T>(
         &self,
-        cx: impl AsRef<LocationContext>,
+        cx: &LocationContext,
         bytes: T,
     ) -> Result<(), LocationError>
     where
         T: AsRef<[u8]> + Into<Vec<u8>>,
     {
-        let LocationContext { http_client, .. } = cx.as_ref();
+        let LocationContext { http_client, .. } = cx;
         use Location::*;
         match self {
             Local(path) => {
@@ -113,7 +109,7 @@ impl Location {
 
     pub async fn write_subfile_with_context<T>(
         &self,
-        cx: impl AsRef<LocationContext>,
+        cx: &LocationContext,
         name: &str,
         bytes: T,
     ) -> Result<Location, ShardError>
@@ -142,11 +138,8 @@ impl Location {
         }
     }
 
-    pub async fn delete_with_context(
-        &self,
-        cx: impl AsRef<LocationContext>,
-    ) -> Result<(), LocationError> {
-        let LocationContext { http_client, .. } = cx.as_ref();
+    pub async fn delete_with_context(&self, cx: &LocationContext) -> Result<(), LocationError> {
+        let LocationContext { http_client, .. } = cx;
         use Location::*;
         match self {
             Http(url) => {
@@ -161,11 +154,8 @@ impl Location {
         }
     }
 
-    pub fn default_context() -> impl AsRef<LocationContext> + Clone + Send + Sync {
-        lazy_static! {
-            static ref CX: Arc<LocationContext> = Arc::new(LocationContext::builder().build());
-        }
-        <Arc<_> as Clone>::clone(&CX)
+    pub fn default_context() -> LocationContext {
+        Default::default()
     }
 
     pub fn is_child_of(&self, other: &Location) -> bool {
@@ -202,6 +192,15 @@ pub struct LocationContext {
     http_client: reqwest::Client,
 }
 
+impl Default for LocationContext {
+    fn default() -> Self {
+        lazy_static! {
+            static ref CX: LocationContext = LocationContext::builder().build();
+        }
+        <LocationContext as Clone>::clone(&CX)
+    }
+}
+
 impl LocationContext {
     pub fn builder() -> LocationContextBuilder {
         Default::default()
@@ -219,6 +218,7 @@ impl LocationContextBuilder {
             http_client: Some(http_client),
         }
     }
+
     pub fn build(self) -> LocationContext {
         LocationContext {
             http_client: self.http_client.unwrap_or_else(reqwest::Client::new),

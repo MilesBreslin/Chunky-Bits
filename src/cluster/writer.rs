@@ -17,7 +17,8 @@ use crate::{
     cluster::{
         ClusterNode,
         ClusterNodes,
-        ClusterNodesWithProfile,
+        DestinationContainer,
+        DestinationInner,
         ZoneRule,
         ZoneRules,
     },
@@ -29,7 +30,7 @@ use crate::{
 };
 
 pub(super) struct ClusterWriterState {
-    pub parent: ClusterNodesWithProfile,
+    pub parent: DestinationContainer,
     pub inner_state: Mutex<ClusterWriterInnerState>,
 }
 pub(super) struct ClusterWriterInnerState {
@@ -41,7 +42,7 @@ pub(super) struct ClusterWriterInnerState {
 
 impl ClusterWriterState {
     async fn next_writer(&self) -> Result<(usize, &ClusterNode), ShardError> {
-        let (nodes, _profile) = self.parent.0.as_ref();
+        let DestinationInner { ref nodes, .. } = &*self.parent;
         let mut state = self.inner_state.lock().await;
         if state.available_indexes.len() == 0 {
             return Err(state
@@ -73,7 +74,7 @@ impl ClusterWriterState {
     }
 
     async fn invalidate_index(&self, index: usize, err: ShardError) -> () {
-        let (nodes, _profile) = self.parent.0.as_ref();
+        let DestinationInner { nodes, .. } = &*self.parent;
         let mut state = self.inner_state.lock().await;
         state.failed_indexes.insert(index);
         state.errors.push(err);
@@ -203,16 +204,21 @@ pub struct ClusterWriter {
 #[async_trait]
 impl ShardWriter for ClusterWriter {
     async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardError> {
+        let state = &*self.state;
+        let DestinationInner {
+            location_context: cx,
+            ..
+        } = &*state.parent;
         loop {
-            match self.state.as_ref().next_writer().await {
+            match state.next_writer().await {
                 Ok((index, node)) => {
                     let writer = &node.location.location;
-                    match writer.write_subfile(hash, bytes).await {
+                    match writer.write_subfile_with_context(cx, hash, bytes).await {
                         Ok(loc) => {
                             return Ok(vec![loc]);
                         },
                         Err(err) => {
-                            self.state.invalidate_index(index, err).await;
+                            state.invalidate_index(index, err).await;
                         },
                     }
                 },

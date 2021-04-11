@@ -29,9 +29,12 @@ use crate::{
         ClusterNodes,
         ClusterProfile,
         ClusterProfiles,
+        DestinationContainer,
+        DestinationInner,
         FileOrDirectory,
         MetadataFormat,
         MetadataTypes,
+        Tunables,
     },
     error::{
         ClusterError,
@@ -57,6 +60,10 @@ pub struct Cluster {
     #[serde(alias = "metadata")]
     pub metadata: MetadataTypes,
     pub profiles: ClusterProfiles,
+    #[serde(default)]
+    #[serde(alias = "tunable")]
+    #[serde(alias = "tuning")]
+    pub tunables: Tunables,
 }
 
 impl Cluster {
@@ -110,7 +117,11 @@ impl Cluster {
         &self,
         profile: &ClusterProfile,
     ) -> impl CollectionDestination + Send + Sync {
-        self.destinations.clone().with_profile(profile.clone())
+        DestinationContainer::from(DestinationInner {
+            nodes: self.destinations.clone(),
+            location_context: self.tunables.as_ref().clone(),
+            profile: profile.clone(),
+        })
     }
 
     pub fn get_profile<'a>(

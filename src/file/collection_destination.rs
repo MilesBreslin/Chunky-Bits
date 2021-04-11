@@ -11,6 +11,7 @@ use crate::{
     },
     file::{
         Location,
+        LocationContext,
         WeightedLocation,
     },
 };
@@ -24,6 +25,9 @@ pub trait CollectionDestination {
     ) -> Result<Vec<Self::Writer>, FileWriteError> {
         let writers_needed = locations.iter().filter_map(|loc| *loc).count();
         self.get_writers(writers_needed)
+    }
+    fn get_context(&self) -> LocationContext {
+        Default::default()
     }
 }
 
