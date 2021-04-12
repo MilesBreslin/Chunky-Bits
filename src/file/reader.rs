@@ -39,17 +39,17 @@ impl FileReadBuilder {
     }
 
     pub fn stream_reader(self) -> impl Stream<Item = Result<Vec<u8>, FileReadError>> {
-        let FileReadBuilder { file, buffer, location_context } = self;
+        let FileReadBuilder {
+            file,
+            buffer,
+            location_context,
+        } = self;
         let FileReference { parts, length, .. } = file;
         let mut bytes_remaining: u64 = length.unwrap();
-        stream::iter(
-            parts
-                .into_iter()
-                .map(move |part| {
-                    let location_context = location_context.clone();
-                    async move { part.read_with_context(&location_context).await }
-                }),
-        )
+        stream::iter(parts.into_iter().map(move |part| {
+            let location_context = location_context.clone();
+            async move { part.read_with_context(&location_context).await }
+        }))
         .buffered(buffer)
         .map(move |res| match res {
             Ok(mut bytes) => {

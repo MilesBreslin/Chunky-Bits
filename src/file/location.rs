@@ -118,23 +118,26 @@ impl Location {
         let length = bytes.as_ref().len();
 
         use Location::*;
-        let result: Result<(), LocationError> = async move { match self {
-            Local(path) => {
-                let mut file = File::create(&path).await?;
-                file.write_all(bytes.as_ref()).await?;
-                file.flush().await?;
-                Ok(())
-            },
-            Http(url) => {
-                let response = http_client
-                    .put(Into::<Url>::into(url.clone()))
-                    .body(bytes.into())
-                    .send()
-                    .await;
-                response?;
-                Ok(())
-            },
-        }}.await;
+        let result: Result<(), LocationError> = async move {
+            match self {
+                Local(path) => {
+                    let mut file = File::create(&path).await?;
+                    file.write_all(bytes.as_ref()).await?;
+                    file.flush().await?;
+                    Ok(())
+                },
+                Http(url) => {
+                    let response = http_client
+                        .put(Into::<Url>::into(url.clone()))
+                        .body(bytes.into())
+                        .send()
+                        .await;
+                    response?;
+                    Ok(())
+                },
+            }
+        }
+        .await;
 
         if let Some(op_start) = op_start {
             let profiler = profiler.unwrap();
