@@ -52,7 +52,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileReference {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compression: Option<Compression>,
@@ -306,7 +306,14 @@ impl FileReference {
         }
     }
 
-    pub async fn to_writer<W>(&self, writer: &mut W) -> Result<(), FileReadError>
+    pub fn reader(&self) -> impl AsyncRead {
+        let file = self.clone();
+        let (reader, mut writer) = tokio::io::duplex(1 << 24);
+        tokio::spawn(async move { file.to_writer(&mut writer).await });
+        reader
+    }
+
+    async fn to_writer<W>(&self, writer: &mut W) -> Result<(), FileReadError>
     where
         W: AsyncWrite + Unpin,
     {

@@ -139,8 +139,7 @@ impl Cluster {
         path: impl AsRef<Path>,
     ) -> Result<impl AsyncRead + Unpin, MetadataReadError> {
         let file_ref = self.get_file_ref(path).await?;
-        let (reader, mut writer) = tokio::io::duplex(1 << 24);
-        tokio::spawn(async move { file_ref.to_writer(&mut writer).await });
+        let reader = file_ref.reader();
         Ok(reader)
     }
 

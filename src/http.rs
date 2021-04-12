@@ -35,8 +35,7 @@ async fn index_get(
         Ok(file_ref) => {
             let length = file_ref.length.clone();
             let content_type = file_ref.content_type.clone();
-            let (reader, mut writer) = tokio::io::duplex(1 << 24);
-            tokio::spawn(async move { file_ref.to_writer(&mut writer).await });
+            let reader = file_ref.reader();
             let stream = FramedRead::new(reader, BytesCodec::new());
             let mut response_builder = Response::builder().status(StatusCode::OK);
             if let Some(length) = length {

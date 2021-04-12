@@ -321,7 +321,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let file_reference: FileReference =
                 serde_yaml::from_reader(&std::fs::File::open(file_reference)?)?;
             let mut f_dest = File::create(destination).await?;
-            file_reference.to_writer(&mut f_dest).await?;
+            let mut reader = file_reference.reader();
+            io::copy(&mut reader, &mut f_dest).await?;
         },
         Command::VerifyFile { file } => {
             let file_reference: FileReference =
