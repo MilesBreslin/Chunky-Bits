@@ -6,11 +6,14 @@ use std::{
 use chunky_bits::{
     error::FileWriteError,
     file::{
+        new_profiler,
         FileReference,
         Location,
+        LocationContext,
         WeightedLocation,
     },
 };
+use futures::stream::StreamExt;
 use tempfile::{
     tempdir,
     TempDir,
@@ -104,5 +107,35 @@ async fn not_enough_writers() -> Result<(), Box<dyn Error>> {
     for dir in directories.drain(..) {
         dir.close()?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_read_profiler() -> Result<(), Box<dyn Error>> {
+    let mut directories: Vec<TempDir> = vec![tempdir()?, tempdir()?, tempdir()?, tempdir()?];
+    let locations: Vec<WeightedLocation> = directories
+        .iter()
+        .map(|dir| Location::from(dir.path()).into())
+        .collect();
+    let length = (1 << 23) + 7;
+    let mut reader = repeat(0).take(length);
+    let file_ref = FileReference::write_builder()
+        .data_chunks(2)
+        .parity_chunks(1)
+        .destination(locations)
+        .write(&mut reader)
+        .await?;
+    let (profiler, reporter) = new_profiler();
+    let location_context: LocationContext = LocationContext::builder().profiler(profiler).build();
+    let mut stream = file_ref
+        .read_builder()
+        .location_context(location_context)
+        .stream_reader();
+    while let Some(_) = stream.next().await {}
+    let report = reporter.profile().await;
+    let average_duration = report.average_read_duration().unwrap();
+    assert!(average_duration.as_nanos() > 0);
+    assert!(average_duration.as_millis() < 1000);
+    assert!(report.average_write_duration() == None);
     Ok(())
 }
