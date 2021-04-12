@@ -165,7 +165,6 @@ dependencies = [
  "futures",
  "hex",
  "lazy_static",
- "pin-project",
  "rand 0.8.3",
  "reed-solomon-erasure",
  "reqwest",

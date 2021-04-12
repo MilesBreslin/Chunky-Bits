@@ -15,7 +15,6 @@ bytes = "1"
 futures = "0.3"
 hex = { version = "0.4", features = [ "std", "serde" ] }
 lazy_static = "1.4"
-pin-project = "1.0"
 rand = { version = "0.8", features = [ "serde" ] }
 reed-solomon-erasure = { version = "4.0" }
 reqwest = { version = "0.11", features = [ "default-tls", "gzip", "brotli" ] }
