@@ -48,6 +48,7 @@ use crate::{
         CollectionDestination,
         Encryption,
         Location,
+        LocationContext,
         ShardWriter,
     },
 };
@@ -64,7 +65,10 @@ pub struct FilePart {
 }
 
 impl FilePart {
-    pub(crate) async fn read(&self) -> Result<Vec<u8>, FileReadError> {
+    pub(crate) async fn read_with_context(
+        &self,
+        cx: &LocationContext,
+    ) -> Result<Vec<u8>, FileReadError> {
         let r: ReedSolomon<galois_8::Field> = ReedSolomon::new(self.data.len(), self.parity.len())?;
         let all_chunks_owned = self
             .data
@@ -89,7 +93,7 @@ impl FilePart {
                         let (index, mut chunk) = all_chunks.remove(sample);
                         drop(all_chunks);
                         for location in chunk.locations.drain(..) {
-                            if let Ok(data) = location.read().await {
+                            if let Ok(data) = location.read_with_context(cx).await {
                                 let (equality, data) = chunk.hash.verify_async(data).await.unwrap();
                                 if equality {
                                     return Some((index, data));

@@ -11,27 +11,44 @@ use tokio_util::io::StreamReader;
 
 use crate::{
     error::FileReadError,
-    file::FileReference,
+    file::{
+        FileReference,
+        LocationContext,
+    },
 };
 
 pub struct FileReadBuilder {
     file: FileReference,
     buffer: usize,
+    location_context: LocationContext,
 }
 
 impl FileReadBuilder {
     pub(super) fn new(file: FileReference) -> FileReadBuilder {
-        FileReadBuilder { file, buffer: 5 }
+        FileReadBuilder {
+            file,
+            buffer: 5,
+            location_context: Default::default(),
+        }
+    }
+
+    pub fn location_context(self, location_context: LocationContext) -> FileReadBuilder {
+        let mut new = self;
+        new.location_context = location_context;
+        new
     }
 
     pub fn stream_reader(self) -> impl Stream<Item = Result<Vec<u8>, FileReadError>> {
-        let FileReadBuilder { file, buffer } = self;
+        let FileReadBuilder { file, buffer, location_context } = self;
         let FileReference { parts, length, .. } = file;
         let mut bytes_remaining: u64 = length.unwrap();
         stream::iter(
             parts
                 .into_iter()
-                .map(|part| async move { part.read().await }),
+                .map(move |part| {
+                    let location_context = location_context.clone();
+                    async move { part.read_with_context(&location_context).await }
+                }),
         )
         .buffered(buffer)
         .map(move |res| match res {
