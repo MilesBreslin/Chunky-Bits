@@ -13,3 +13,5 @@ pub use weighted_location::*;
 pub mod hash;
 mod profiler;
 pub use profiler::*;
+mod writer;
+pub use writer::*;
