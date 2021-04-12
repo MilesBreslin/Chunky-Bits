@@ -8,10 +8,6 @@ use futures::stream::{
     StreamExt,
 };
 use tokio::io;
-use tokio_util::codec::{
-    BytesCodec,
-    FramedRead,
-};
 use warp::{
     http::{
         Response,
@@ -35,8 +31,7 @@ async fn index_get(
         Ok(file_ref) => {
             let length = file_ref.length.clone();
             let content_type = file_ref.content_type.clone();
-            let reader = file_ref.reader();
-            let stream = FramedRead::new(reader, BytesCodec::new());
+            let stream = file_ref.read_builder().stream_reader();
             let mut response_builder = Response::builder().status(StatusCode::OK);
             if let Some(length) = length {
                 response_builder = response_builder.header("Content-Length", length);

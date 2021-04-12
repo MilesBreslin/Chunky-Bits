@@ -35,22 +35,22 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct FileReferenceBuilder<D> {
+pub struct FileWriteBuilder<D> {
     destination: Arc<D>,
-    state: FileReferenceBuilderState,
+    state: FileWriteBuilderState,
 }
 
 #[derive(Copy, Clone)]
-struct FileReferenceBuilderState {
+struct FileWriteBuilderState {
     chunk_size: usize,
     data: usize,
     parity: usize,
     concurrency: usize,
 }
 
-impl Default for FileReferenceBuilderState {
+impl Default for FileWriteBuilderState {
     fn default() -> Self {
-        FileReferenceBuilderState {
+        FileWriteBuilderState {
             chunk_size: 1 << 20,
             data: 3,
             parity: 2,
@@ -59,29 +59,29 @@ impl Default for FileReferenceBuilderState {
     }
 }
 
-impl<D> FileReferenceBuilder<D> {
-    pub fn new() -> FileReferenceBuilder<D>
+impl<D> FileWriteBuilder<D> {
+    pub fn new() -> FileWriteBuilder<D>
     where
         D: Default,
     {
-        FileReferenceBuilder {
+        FileWriteBuilder {
             destination: Arc::new(Default::default()),
             state: Default::default(),
         }
     }
 
-    pub fn destination<DN>(self, destination: DN) -> FileReferenceBuilder<DN>
+    pub fn destination<DN>(self, destination: DN) -> FileWriteBuilder<DN>
     where
         DN: CollectionDestination + Send + Sync + 'static,
     {
         self.destination_arc(Arc::new(destination))
     }
 
-    pub fn destination_arc<DN>(self, destination: Arc<DN>) -> FileReferenceBuilder<DN>
+    pub fn destination_arc<DN>(self, destination: Arc<DN>) -> FileWriteBuilder<DN>
     where
         DN: CollectionDestination + Send + Sync + 'static,
     {
-        FileReferenceBuilder {
+        FileWriteBuilder {
             destination: destination,
             state: self.state,
         }
@@ -112,7 +112,7 @@ impl<D> FileReferenceBuilder<D> {
     }
 }
 
-impl<D> FileReferenceBuilder<D>
+impl<D> FileWriteBuilder<D>
 where
     D: CollectionDestination + Send + Sync + 'static,
 {
@@ -121,7 +121,7 @@ where
         reader: &mut (impl AsyncRead + Unpin),
     ) -> Result<FileReference, FileWriteError> {
         let destination = self.destination.clone();
-        let FileReferenceBuilderState {
+        let FileWriteBuilderState {
             chunk_size,
             data,
             parity,

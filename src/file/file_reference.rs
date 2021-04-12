@@ -12,15 +12,9 @@ use serde::{
     Deserialize,
     Serialize,
 };
-use tokio::io::{
-    AsyncRead,
-    AsyncWrite,
-    AsyncWriteExt,
-};
 
 use crate::{
     error::{
-        FileReadError,
         FileWriteError,
         LocationError,
     },
@@ -29,7 +23,8 @@ use crate::{
         CollectionDestination,
         Compression,
         FilePart,
-        FileReferenceBuilder,
+        FileReadBuilder,
+        FileWriteBuilder,
         Location,
         ResilverPartReport,
         VerifyPartReport,
@@ -47,40 +42,12 @@ pub struct FileReference {
 }
 
 impl FileReference {
-    pub fn write_builder() -> FileReferenceBuilder<()> {
-        FileReferenceBuilder::new()
+    pub fn write_builder() -> FileWriteBuilder<()> {
+        FileWriteBuilder::new()
     }
 
-    pub fn reader(&self) -> impl AsyncRead {
-        let file = self.clone();
-        let (reader, mut writer) = tokio::io::duplex(1 << 24);
-        tokio::spawn(async move { file.to_writer(&mut writer).await });
-        reader
-    }
-
-    async fn to_writer<W>(&self, writer: &mut W) -> Result<(), FileReadError>
-    where
-        W: AsyncWrite + Unpin,
-    {
-        let mut bytes_written: u64 = 0;
-        for file_part in &self.parts {
-            if self.length.map(|len| bytes_written >= len).unwrap_or(false) {
-                break;
-            }
-            let buf = file_part.read().await?;
-            if let Some(file_length) = self.length {
-                let bytes_remaining: u64 = file_length - bytes_written;
-                let mut w_buf: &[u8] = &buf;
-                if bytes_remaining < w_buf.len() as u64 {
-                    w_buf = &buf[..bytes_remaining as usize];
-                }
-                bytes_written += w_buf.len() as u64;
-                writer.write_all(&w_buf).await?;
-            } else {
-                writer.write_all(&buf).await?;
-            }
-        }
-        Ok(())
+    pub fn read_builder(self) -> FileReadBuilder {
+        FileReadBuilder::new(self)
     }
 
     pub async fn verify(&self) -> VerifyFileReport<'_> {

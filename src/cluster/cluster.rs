@@ -139,7 +139,7 @@ impl Cluster {
         path: impl AsRef<Path>,
     ) -> Result<impl AsyncRead + Unpin, MetadataReadError> {
         let file_ref = self.get_file_ref(path).await?;
-        let reader = file_ref.reader();
+        let reader = file_ref.read_builder().reader();
         Ok(reader)
     }
 
