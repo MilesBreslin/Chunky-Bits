@@ -128,9 +128,9 @@ async fn test_read_profiler() -> Result<(), Box<dyn Error>> {
     let (profiler, reporter) = new_profiler();
     let location_context: LocationContext = LocationContext::builder().profiler(profiler).build();
     let mut stream = file_ref
-        .read_builder()
+        .read_builder_owned()
         .location_context(location_context)
-        .stream_reader();
+        .stream_reader_owned();
     while let Some(_) = stream.next().await {}
     let report = reporter.profile().await;
     let average_duration = report.average_read_duration().unwrap();

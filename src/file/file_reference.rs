@@ -46,7 +46,11 @@ impl FileReference {
         FileWriteBuilder::new()
     }
 
-    pub fn read_builder(self) -> FileReadBuilder {
+    pub fn read_builder(&self) -> FileReadBuilder<&FileReference> {
+        FileReadBuilder::new(self)
+    }
+
+    pub fn read_builder_owned(self) -> FileReadBuilder<FileReference> {
         FileReadBuilder::new(self)
     }
 
