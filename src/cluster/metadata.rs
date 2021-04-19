@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     convert::TryInto,
     path::{
         Component,
@@ -225,10 +226,17 @@ impl MetadataFormat {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum FileOrDirectory {
     Directory(PathBuf),
     File(PathBuf),
+}
+
+impl fmt::Display for FileOrDirectory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let path: &PathBuf = self.as_ref();
+        write!(f, "{}", path.display())
+    }
 }
 
 impl FileOrDirectory {

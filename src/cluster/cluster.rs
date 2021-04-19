@@ -45,6 +45,7 @@ use crate::{
         hash::AnyHash,
         new_profiler,
         Chunk,
+        FileWriteBuilder,
         CollectionDestination,
         FilePart,
         FileReference,
@@ -76,6 +77,26 @@ impl Cluster {
         MetadataFormat::Yaml.from_location(location).await
     }
 
+    pub fn get_file_writer(
+        &self,
+        profile: &ClusterProfile,
+    ) -> FileWriteBuilder<impl CollectionDestination + Send + Sync> {
+        let destination = self.get_destination(profile);
+        FileReference::write_builder()
+            .destination(destination)
+            .chunk_size((1 as usize) << profile.get_chunk_size())
+            .data_chunks(profile.get_data_chunks())
+    }
+
+    pub async fn write_file_ref(
+        &self,
+        path: impl AsRef<Path>,
+        file_ref: &FileReference,
+    ) -> Result<(), ClusterError> {
+        self.metadata.write(path, &file_ref).await?;
+        Ok(())
+    }
+
     pub async fn write_file<R>(
         &self,
         path: impl AsRef<Path>,
@@ -86,14 +107,8 @@ impl Cluster {
     where
         R: AsyncRead + Unpin,
     {
-        let destination = self.get_destination(profile).await;
-        let mut file_ref = FileReference::write_builder()
-            .destination(destination)
-            .chunk_size((1 as usize) << profile.get_chunk_size())
-            .data_chunks(profile.get_data_chunks())
-            .parity_chunks(profile.get_parity_chunks())
-            .write(reader)
-            .await?;
+        let destination = self.get_destination(profile);
+        let mut file_ref = self.get_file_writer(profile).write(reader).await?;
         file_ref.content_type = content_type;
         self.metadata.write(path, &file_ref).await.unwrap();
         Ok(())
@@ -143,7 +158,7 @@ impl Cluster {
         Ok(reader)
     }
 
-    pub async fn get_destination(
+    pub fn get_destination(
         &self,
         profile: &ClusterProfile,
     ) -> impl CollectionDestination + Send + Sync {

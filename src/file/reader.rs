@@ -91,7 +91,7 @@ where
         self.inner_stream_reader(parts.iter(), length.unwrap())
     }
 
-    pub fn reader(&self) -> impl AsyncRead + '_ {
+    pub fn reader(&self) -> impl AsyncRead + Unpin + '_ {
         Self::inner_reader(self.stream_reader())
     }
 }
@@ -119,7 +119,7 @@ where
         new.inner_stream_reader(parts, length)
     }
 
-    pub fn reader_owned(self) -> impl AsyncRead + 'static {
+    pub fn reader_owned(self) -> impl AsyncRead + Unpin + 'static {
         FileReadBuilder::<()>::inner_reader(self.stream_reader_owned())
     }
 }

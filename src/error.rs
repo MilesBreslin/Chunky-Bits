@@ -247,8 +247,9 @@ impl std::error::Error for MetadataReadError {}
 #[derive(Debug)]
 pub enum LocationParseError {
     Parse(url::ParseError),
-    NotHttp,
     FilePathNotAbsolute,
+    InvalidScheme,
+    NotHttp,
 }
 
 impl_from_err! {
@@ -262,8 +263,9 @@ impl Display for LocationParseError {
         use LocationParseError::*;
         match self {
             Parse(e) => write!(f, "Parse: {}", e),
-            NotHttp => write!(f, "Not HTTP"),
             FilePathNotAbsolute => write!(f, "File path not absolute"),
+            InvalidScheme => write!(f, "Invalid scheme"),
+            NotHttp => write!(f, "Not HTTP"),
         }
     }
 }

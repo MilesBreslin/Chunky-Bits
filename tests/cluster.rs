@@ -177,7 +177,7 @@ async fn test_resilver() -> Result<(), Box<dyn Error>> {
     assert!(verify_report.unavailable_locations().count() == deleted_chunks);
 
     let resilver_report = file_ref
-        .resilver(Arc::new(cluster.get_destination(&profile).await))
+        .resilver(Arc::new(cluster.get_destination(&profile)))
         .await;
     // All of the parts should report no errors during resilver
     assert!(resilver_report.is_ok());

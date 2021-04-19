@@ -2,15 +2,22 @@ use std::{
     convert::TryFrom,
     fmt,
     hash::Hash,
+    io::Cursor,
     path::{
         Path,
         PathBuf,
     },
+    pin::Pin,
     str::FromStr,
 };
 
 use async_trait::async_trait;
+use futures::{
+    stream,
+    stream::StreamExt,
+};
 use lazy_static::lazy_static;
+use reqwest::Body;
 use serde::{
     Deserialize,
     Serialize,
@@ -20,9 +27,17 @@ use tokio::{
         self,
         File,
     },
-    io::AsyncWriteExt,
+    io::{
+        self,
+        AsyncRead,
+        AsyncReadExt,
+        AsyncWriteExt,
+    },
+    pin,
+    sync::mpsc,
     time::Instant,
 };
+use tokio_util::io::StreamReader;
 use url::Url;
 
 use crate::{
@@ -100,6 +115,27 @@ impl Location {
         result
     }
 
+    pub async fn reader_with_context(
+        &self,
+        cx: &LocationContext,
+    ) -> Result<(impl AsyncRead + Unpin), LocationError> {
+        // TODO: Profiler
+        use Location::*;
+        let result: Result<Pin<Box<dyn AsyncRead + Unpin>>, _> = match self {
+            Local(path) => Ok(Box::pin(File::open(&path).await?)),
+            Http(url) => {
+                let url: Url = url.clone().into();
+                let s = cx.http_client.get(url).send().await?.bytes_stream();
+                let reader = StreamReader::new(s.map(|res| match res {
+                    Ok(bytes) => Ok(Cursor::new(bytes)),
+                    Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
+                }));
+                Ok(Box::pin(reader))
+            },
+        };
+        result
+    }
+
     pub async fn write_with_context<T>(
         &self,
         cx: &LocationContext,
@@ -144,6 +180,62 @@ impl Location {
             profiler.log_write(&result, self.clone(), length, op_start);
         }
         result
+    }
+
+    pub async fn write_from_reader_with_context(
+        &self,
+        cx: &LocationContext,
+        reader: &mut (impl AsyncRead + Unpin),
+    ) -> Result<u64, LocationError> {
+        // TODO: Profiler
+        use Location::*;
+        match self {
+            Local(path) => {
+                let mut file = File::create(&path).await?;
+                let bytes = io::copy(reader, &mut file).await?;
+                file.flush().await?;
+                Ok(bytes)
+            },
+            Http(url) => {
+                let url: Url = url.clone().into();
+                let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(5);
+                let cx = cx.clone();
+                let response = tokio::spawn(async move {
+                    let LocationContext { http_client, .. } = cx;
+                    let s = stream::unfold(rx, |mut rx| async move {
+                        match rx.recv().await {
+                            Some(result) => Some((result, rx)),
+                            None => None,
+                        }
+                    });
+                    http_client.put(url).body(Body::wrap_stream(s)).send().await
+                });
+                let mut total_bytes = 0;
+                let mut bytes = vec![0; 1 << 20];
+                loop {
+                    match reader.read(&mut bytes).await {
+                        Ok(0) => {
+                            break;
+                        },
+                        Ok(length) => {
+                            total_bytes += length as u64;
+                            let buf: &[u8] = &bytes[0..length];
+                            if let Err(_) = tx.send(Ok(buf.to_owned())).await {
+                                break;
+                            }
+                        },
+                        Err(err) => {
+                            let _ = tx.send(Err(err.kind().into()));
+                            return Err(err.into());
+                        },
+                    }
+                }
+                drop(tx);
+                let response = response.await.unwrap()?;
+                eprintln!("Total: {}", total_bytes);
+                Ok(total_bytes)
+            },
+        }
     }
 
     pub async fn write_subfile_with_context<T>(
@@ -306,6 +398,21 @@ impl FromStr for Location {
             ));
         }
         Ok(Location::Local(FromStr::from_str(s).unwrap()))
+    }
+}
+
+impl TryFrom<Url> for Location {
+    type Error = LocationParseError;
+
+    fn try_from(url: Url) -> Result<Self, Self::Error> {
+        match url.scheme() {
+            "file" => Ok(Location::Local(
+                url.to_file_path()
+                    .map_err(|_| LocationParseError::FilePathNotAbsolute)?,
+            )),
+            "http" => Ok(Location::Http(HttpUrl::try_from(url)?)),
+            _ => Err(LocationParseError::InvalidScheme),
+        }
     }
 }
 
