@@ -1,6 +1,6 @@
 use std::{
-    fmt,
     convert::TryInto,
+    fmt,
     path::{
         Component,
         Path,

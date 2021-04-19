@@ -1,67 +1,13 @@
-use std::{
-    collections::BTreeSet,
-    fmt::{
-        self,
-        Display,
-        Formatter,
-    },
-    net::SocketAddr,
-    num::NonZeroUsize,
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
-use chunky_bits::{
-    cluster::{
-        sized_int::{
-            ChunkSize,
-            DataChunkCount,
-            ParityChunkCount,
-        },
-        Cluster,
-        FileOrDirectory,
-    },
-    file::{
-        self,
-        FileReference,
-        Location,
-        WeightedLocation,
-    },
-    http::{
-        cluster_filter,
-        cluster_filter_get,
-    },
-};
-use futures::stream::{
-    FuturesOrdered,
-    StreamExt,
-};
-use reed_solomon_erasure::{
-    galois_8,
-    ReedSolomon,
-};
-use serde::{
-    Deserialize,
-    Serialize,
-};
 use structopt::StructOpt;
-use tokio::{
-    fs::{
-        self,
-        File,
-    },
-    io::{
-        self,
-        AsyncWrite,
-        AsyncWriteExt,
-    },
-};
+use tokio::io;
 pub mod cluster_location;
 pub mod config;
 pub mod error_message;
 use crate::{
-    config::Config,
-    error_message::ErrorMessage,
     cluster_location::ClusterLocation,
+    config::Config,
 };
 
 #[derive(StructOpt)]
@@ -106,7 +52,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let Opt { command, config } = Opt::from_args();
     let config = Config::builder().path(config);
     match command {
-        Command::Cat{ target } => {
+        Command::Cat { target } => {
             let config = config.load_or_default().await?;
             let mut reader = target.get_reader(&config).await?;
             io::copy(&mut reader, &mut io::stdout()).await?;
@@ -115,23 +61,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let config = config.load_or_default().await?;
             serde_yaml::to_writer(std::io::stdout(), &config)?;
         },
-        Command::ClusterInfo{ cluster } => {
+        Command::ClusterInfo { cluster } => {
             let config = config.load_or_default().await?;
             let cluster = config.get_cluster(&cluster).await?;
             serde_yaml::to_writer(std::io::stdout(), &cluster)?;
         },
-        Command::Cp{ source, destination } => {
+        Command::Cp {
+            source,
+            destination,
+        } => {
             let config = config.load_or_default().await?;
             let mut reader = source.get_reader(&config).await?;
             destination.write_from_reader(&config, &mut reader).await?;
         },
-        Command::Ls{ target } => {
+        Command::Ls { target } => {
             let config = config.load_or_default().await?;
             let files = target.list_files(&config).await?;
             for file in files {
                 println!("{}", file);
             }
-        }
+        },
     }
     Ok(())
 }

@@ -45,10 +45,10 @@ use crate::{
         hash::AnyHash,
         new_profiler,
         Chunk,
-        FileWriteBuilder,
         CollectionDestination,
         FilePart,
         FileReference,
+        FileWriteBuilder,
         Location,
         ProfileReport,
         ProfileReporter,
@@ -107,7 +107,6 @@ impl Cluster {
     where
         R: AsyncRead + Unpin,
     {
-        let destination = self.get_destination(profile);
         let mut file_ref = self.get_file_writer(profile).write(reader).await?;
         file_ref.content_type = content_type;
         self.metadata.write(path, &file_ref).await.unwrap();

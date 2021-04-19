@@ -2,13 +2,8 @@ use std::{
     collections::BTreeMap,
     error::Error,
     path::PathBuf,
-    str::FromStr,
     sync::Arc,
 };
-
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::ops::Deref;
 
 use chunky_bits::{
     cluster::Cluster,
@@ -24,10 +19,7 @@ use tokio::{
     sync::RwLock,
 };
 
-use crate::{
-    cluster_location::ClusterLocation,
-    error_message::ErrorMessage,
-};
+use crate::error_message::ErrorMessage;
 
 #[derive(Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -41,14 +33,14 @@ pub struct Config {
     cluster_cache: RwLock<BTreeMap<String, Arc<Cluster>>>,
 }
 
-#[derive(Serialize,Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct LocalCluster {
     #[serde(flatten)]
     cluster: ClusterType,
     default_profile: Option<String>,
 }
 
-#[derive(Serialize,Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum ClusterType {
     Inline(Arc<Cluster>),

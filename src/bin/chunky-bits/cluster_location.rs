@@ -1,29 +1,33 @@
 use std::{
     convert::TryFrom,
+    error::Error,
     fmt,
     path::{
         Path,
         PathBuf,
     },
+    pin::Pin,
     str::FromStr,
     string::ToString,
 };
 
 use chunky_bits::{
-    error::LocationParseError,
-    file::Location,
-    file::FileReference,
     cluster::FileOrDirectory,
+    file::{
+        FileReference,
+        Location,
+    },
 };
 use serde::{
     Deserialize,
     Serialize,
 };
-use crate::error_message::ErrorMessage;
 use tokio::io::AsyncRead;
-use std::error::Error;
-use crate::config::Config;
-use std::pin::Pin;
+
+use crate::{
+    config::Config,
+    error_message::ErrorMessage,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String")]
@@ -35,24 +39,23 @@ pub enum ClusterLocation {
 }
 
 impl ClusterLocation {
-    pub async fn get_reader(&self, config: &Config) -> Result<impl AsyncRead + Unpin + '_, Box<dyn Error>> {
+    pub async fn get_reader(
+        &self,
+        config: &Config,
+    ) -> Result<impl AsyncRead + Unpin + '_, Box<dyn Error>> {
         use ClusterLocation::*;
         let result: Result<Pin<Box<dyn AsyncRead + Unpin>>, Box<dyn Error>>;
         match self {
-            ClusterFile{ cluster, path } => {
+            ClusterFile { cluster, path } => {
                 let cluster = config.get_cluster(&cluster).await?;
                 let file_ref = cluster.get_file_ref(&path).await?;
-                let reader = file_ref
-                    .read_builder_owned()
-                    .reader_owned();
+                let reader = file_ref.read_builder_owned().reader_owned();
                 result = Ok(Box::pin(reader));
             },
             FileRef(loc) => {
                 let bytes = loc.read().await?;
                 let file_ref: FileReference = serde_yaml::from_slice(&bytes)?;
-                let reader = file_ref
-                    .read_builder_owned()
-                    .reader_owned();
+                let reader = file_ref.read_builder_owned().reader_owned();
                 result = Ok(Box::pin(reader));
             },
             Other(loc) => {
@@ -62,30 +65,38 @@ impl ClusterLocation {
         };
         result
     }
-    pub async fn write_from_reader(&self, config: &Config, reader: &mut (impl AsyncRead + Unpin)) -> Result<u64, Box<dyn Error>> {
+
+    pub async fn write_from_reader(
+        &self,
+        config: &Config,
+        reader: &mut (impl AsyncRead + Unpin),
+    ) -> Result<u64, Box<dyn Error>> {
         use ClusterLocation::*;
         match self {
-            ClusterFile{ cluster: cluster_name, path } => {
+            ClusterFile {
+                cluster: cluster_name,
+                path,
+            } => {
                 let cluster = config.get_cluster(&cluster_name).await?;
                 let profile_name = config.get_profile(&cluster_name).await;
                 let profile = cluster
                     .get_profile(profile_name.as_ref().map(String::as_str))
-                    .ok_or_else(|| ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap())))?;
+                    .ok_or_else(|| {
+                        ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap()))
+                    })?;
                 let file_ref = cluster.get_file_writer(&profile).write(reader).await?;
                 cluster.write_file_ref(path, &file_ref).await?;
                 Ok(file_ref.length.unwrap())
             },
             FileRef(loc) => {
-                let file_ref = FileReference::write_builder()
-                    .write(reader)
-                    .await?;
+                let file_ref = FileReference::write_builder().write(reader).await?;
                 let file_str = serde_json::to_string_pretty(&file_ref)?;
                 loc.write(file_str.as_bytes()).await?;
                 Ok(file_ref.length.unwrap())
-            }
-            Other(loc) => {
-                Ok(loc.write_from_reader_with_context(&Default::default(), reader).await?)
             },
+            Other(loc) => Ok(loc
+                .write_from_reader_with_context(&Default::default(), reader)
+                .await?),
         }
     }
 
@@ -95,23 +106,17 @@ impl ClusterLocation {
     ) -> Result<Vec<FileOrDirectory>, Box<dyn Error>> {
         use ClusterLocation::*;
         match self {
-            ClusterFile{ cluster: cluster_name, path } => {
+            ClusterFile {
+                cluster: cluster_name,
+                path,
+            } => {
                 let cluster = config.get_cluster(&cluster_name).await?;
-                let profile_name = config.get_profile(&cluster_name).await;
                 return Ok(cluster.list_files(path).await?);
             },
             _ => {
                 todo!();
             },
         }
-    }
-
-    pub async fn list_files_recursive(
-        &self,
-        config: &Config,
-        path: impl AsRef<Path>,
-    ) -> Result<Vec<FileOrDirectory>, Box<dyn Error>> {
-        todo!();
     }
 }
 
@@ -121,23 +126,27 @@ impl FromStr for ClusterLocation {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut split = s.split("#");
         match (split.next(), split.next(), split.next()) {
-            (Some("@"), Some(path), None) =>
-                Ok(ClusterLocation::FileRef(
-                    Location::from_str(path)?
-                )),
+            (Some("@"), Some(path), None) => {
+                Ok(ClusterLocation::FileRef(Location::from_str(path)?))
+            },
             (Some(cluster), Some(path), None)
-                if !(cluster.chars().next().as_ref().map_or(false, char::is_ascii_alphanumeric)
+                if !(cluster
+                    .chars()
+                    .next()
+                    .as_ref()
+                    .map_or(false, char::is_ascii_alphanumeric)
                     && cluster.len() == 1) =>
+            {
                 Ok(ClusterLocation::ClusterFile {
                     cluster: cluster.to_string(),
                     path: path.into(),
-                }),
-            (Some(cluster), Some(_), None) =>
-                Err(ErrorMessage::from(format!("Invalid cluster name: {}", cluster)).into()),
-            (Some(_), None, None) =>
-                Ok(Location::from_str(s).map(Into::into)?),
-            _ => 
-                Err(ErrorMessage::from(format!("Invalid cluster location format: {}", s)).into()),
+                })
+            },
+            (Some(cluster), Some(_), None) => {
+                Err(ErrorMessage::from(format!("Invalid cluster name: {}", cluster)).into())
+            },
+            (Some(_), None, None) => Ok(Location::from_str(s).map(Into::into)?),
+            _ => Err(ErrorMessage::from(format!("Invalid cluster location format: {}", s)).into()),
         }
     }
 }

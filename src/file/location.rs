@@ -33,7 +33,6 @@ use tokio::{
         AsyncReadExt,
         AsyncWriteExt,
     },
-    pin,
     sync::mpsc,
     time::Instant,
 };
@@ -231,7 +230,7 @@ impl Location {
                     }
                 }
                 drop(tx);
-                let response = response.await.unwrap()?;
+                response.await.unwrap()?;
                 eprintln!("Total: {}", total_bytes);
                 Ok(total_bytes)
             },

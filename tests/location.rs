@@ -1,40 +1,47 @@
 use std::{
+    convert::TryFrom,
     error::Error,
     str::FromStr,
-    convert::TryFrom,
 };
-use url::Url;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
 
 use chunky_bits::file::Location;
 use tempfile::tempdir;
+use tokio::io::{
+    AsyncReadExt,
+    AsyncWriteExt,
+};
+use url::Url;
 
 const DEFAULT_PAYLOAD: &[u8] = "HELLO WORLD".as_bytes();
 
 mod http_server {
-    use super::*;
     use std::{
         collections::HashMap,
         convert::Infallible,
-        sync::Arc,
         net::SocketAddr,
+        ops::Deref,
+        sync::Arc,
     };
 
-    use std::ops::Deref;
-
     use bytes::Bytes;
-    use tokio::sync::Mutex;
-    use tokio::sync::oneshot;
-    use tokio::task::JoinHandle;
+    use tokio::{
+        sync::{
+            oneshot,
+            Mutex,
+        },
+        task::JoinHandle,
+    };
     use warp::{
         path::FullPath,
         Filter,
     };
 
+    use super::*;
+
     pub struct HttpServer(Url, oneshot::Sender<()>, JoinHandle<()>);
     impl Deref for HttpServer {
         type Target = Url;
+
         fn deref(&self) -> &Self::Target {
             &self.0
         }
@@ -80,12 +87,9 @@ mod http_server {
                 );
         let (tx, rx) = oneshot::channel::<()>();
         let (_, server) = warp::serve(get_filter.or(put_filter))
-            .try_bind_with_graceful_shutdown(
-                addr,
-                async {
-                    let _ = rx.await;
-                },
-            )
+            .try_bind_with_graceful_shutdown(addr, async {
+                let _ = rx.await;
+            })
             .unwrap();
 
         let handle = tokio::spawn(server);
@@ -126,7 +130,10 @@ async fn location_fs_reader_writer() -> Result<(), Box<dyn Error>> {
 
     let payload = DEFAULT_PAYLOAD;
     let mut reader = payload.clone();
-    let len = location.write_from_reader_with_context(&Default::default(), &mut reader).await.unwrap();
+    let len = location
+        .write_from_reader_with_context(&Default::default(), &mut reader)
+        .await
+        .unwrap();
     assert_eq!(len, payload.len() as u64);
 
     let mut reader = location.reader_with_context(&Default::default()).await?;
@@ -172,7 +179,10 @@ async fn location_http_reader_writer() -> Result<(), Box<dyn Error>> {
 
     let new_bytes = "NEW DATA".as_bytes();
     let mut reader = new_bytes.clone();
-    let len = location.write_from_reader_with_context(&Default::default(), &mut reader).await.unwrap();
+    let len = location
+        .write_from_reader_with_context(&Default::default(), &mut reader)
+        .await
+        .unwrap();
     assert_eq!(len, new_bytes.len() as u64);
     let mut reader = location.reader_with_context(&Default::default()).await?;
     let mut bytes = Vec::new();
