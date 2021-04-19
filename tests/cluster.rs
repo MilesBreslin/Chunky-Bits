@@ -188,6 +188,49 @@ async fn test_resilver() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn test_resilver_owned() -> Result<(), Box<dyn Error>> {
+    let cluster = TestCluster::new().await?;
+    let mut profile = cluster.get_profile(None).unwrap().clone();
+    profile.chunk_size = ChunkSize::try_from(10)?;
+    let mut reader = TestCluster::default_reader();
+    cluster
+        .write_file("TESTFILE", &mut reader, &profile, None)
+        .await?;
+    let mut file_ref = cluster.get_file_ref("TESTFILE").await?;
+    // File should be 100% Valid
+    assert!(file_ref.verify().await.is_ok());
+    let mut deleted_chunks: usize = 0;
+    for part in file_ref.parts.iter_mut() {
+        // Delete 1 / 3 data chunks
+        let location_with_hash = part.data.first().unwrap();
+        let location = location_with_hash.locations.first().unwrap();
+        let _ = location.delete().await;
+        assert!(location.read().await.is_err());
+
+        // Delete 1 / 2 parity chunks
+        let location_with_hash = part.parity.first().unwrap();
+        let location = location_with_hash.locations.first().unwrap();
+        let _ = location.delete().await;
+        assert!(location.read().await.is_err());
+
+        deleted_chunks += 2;
+    }
+    // File should not be 100% Valid
+    let verify_report = file_ref.verify().await;
+    assert!(!verify_report.is_ok());
+    assert!(verify_report.is_available());
+    assert!(verify_report.unavailable_locations().count() == deleted_chunks);
+
+    let resilver_report = file_ref
+        .resilver_owned(Arc::new(cluster.get_destination(&profile)))
+        .await;
+    // All of the parts should report no errors during resilver
+    assert!(resilver_report.is_ok());
+    assert!(resilver_report.new_locations().count() == deleted_chunks);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_profiler() -> Result<(), Box<dyn Error>> {
     let cluster = TestCluster::new().await?;
     let mut reader = TestCluster::default_reader();

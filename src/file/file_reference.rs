@@ -1,5 +1,7 @@
 use std::{
     fmt,
+    ops::Deref,
+    pin::Pin,
     sync::Arc,
 };
 
@@ -66,6 +68,21 @@ impl FileReference {
         }
     }
 
+    pub async fn resilver_owned<D>(self, destination: Arc<D>) -> ResilverFileReportOwned
+    where
+        D: CollectionDestination + Send + Sync + 'static,
+    {
+        let mut file = Box::pin(self);
+        let mut file_ref = file.as_mut();
+        let report: ResilverFileReport = file_ref.resilver(destination).await;
+        let report_owned = ResilverFileReportOwned {
+            // Set the lifetime of the report to be static
+            report: unsafe { std::mem::transmute(report) },
+            file,
+        };
+        report_owned
+    }
+
     pub async fn resilver<D>(&mut self, destination: Arc<D>) -> ResilverFileReport<'_>
     where
         D: CollectionDestination + Send + Sync + 'static,
@@ -82,9 +99,34 @@ impl FileReference {
     }
 }
 
+pub struct ResilverFileReportOwned {
+    file: Pin<Box<FileReference>>,
+    report: ResilverFileReport<'static>,
+}
+
+impl Deref for ResilverFileReportOwned {
+    type Target = ResilverFileReport<'static>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.as_ref()
+    }
+}
+
+impl AsRef<ResilverFileReport<'static>> for ResilverFileReportOwned {
+    fn as_ref(&self) -> &ResilverFileReport<'static> {
+        &self.report
+    }
+}
+
+impl AsRef<FileReference> for ResilverFileReportOwned {
+    fn as_ref(&self) -> &FileReference {
+        &self.file
+    }
+}
+
 macro_rules! report_common {
     ($report_type:ident) => {
-        impl<'a> $report_type<'a> {
+        impl $report_type<'_> {
             /// Does the FilePart at least 1 valid location for each chunk
             pub fn is_ok(&self) -> bool {
                 self.part_reports.iter().all(|report| report.is_ok())
@@ -176,7 +218,7 @@ impl fmt::Display for ResilverFileReport<'_> {
 
 report_common!(ResilverFileReport);
 
-impl<'a> ResilverFileReport<'a> {
+impl ResilverFileReport<'_> {
     pub fn rebuild_errors(&self) -> impl Iterator<Item = Result<(), &FileWriteError>> {
         self.part_reports
             .iter()

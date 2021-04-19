@@ -9,6 +9,7 @@ use std::{
     pin::Pin,
     str::FromStr,
     string::ToString,
+    sync::Arc,
 };
 
 use chunky_bits::{
@@ -16,6 +17,7 @@ use chunky_bits::{
     file::{
         FileReference,
         Location,
+        ResilverFileReportOwned,
     },
 };
 use serde::{
@@ -116,6 +118,33 @@ impl ClusterLocation {
             _ => {
                 todo!();
             },
+        }
+    }
+
+    pub async fn resilver(
+        &self,
+        config: &Config,
+    ) -> Result<ResilverFileReportOwned, Box<dyn Error>> {
+        use ClusterLocation::*;
+        match self {
+            ClusterFile {
+                cluster: cluster_name,
+                path,
+            } => {
+                let cluster = config.get_cluster(&cluster_name).await?;
+                let profile_name = config.get_profile(&cluster_name).await;
+                let profile = cluster
+                    .get_profile(profile_name.as_ref().map(String::as_str))
+                    .ok_or_else(|| {
+                        ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap()))
+                    })?;
+                let destination = cluster.get_destination(&profile);
+                let file_ref = cluster.get_file_ref(&path).await?;
+                let destination = Arc::new(destination);
+                let report = file_ref.resilver_owned(destination).await;
+                Ok(report)
+            },
+            _ => Err(ErrorMessage::from("Resilver is only supported on cluster files").into()),
         }
     }
 }

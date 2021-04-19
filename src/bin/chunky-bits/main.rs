@@ -35,6 +35,9 @@ enum Command {
     Ls {
         target: ClusterLocation,
     },
+    Resilver {
+        target: ClusterLocation,
+    },
 }
 
 #[tokio::main]
@@ -80,6 +83,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             for file in files {
                 println!("{}", file);
             }
+        },
+        Command::Resilver { target } => {
+            let config = config.load_or_default().await?;
+            let report = target.resilver(&config).await?;
+            println!("{}", *report);
         },
     }
     Ok(())
