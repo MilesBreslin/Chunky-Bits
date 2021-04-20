@@ -1,5 +1,9 @@
-use std::path::PathBuf;
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+};
 
+use chunky_bits::http::cluster_filter;
 use structopt::StructOpt;
 use tokio::io;
 pub mod cluster_location;
@@ -31,6 +35,11 @@ enum Command {
     Cp {
         source: ClusterLocation,
         destination: ClusterLocation,
+    },
+    HttpGateway {
+        cluster: String,
+        #[structopt(short, long, default_value = "127.0.0.1:8000")]
+        listen_addr: SocketAddr,
     },
     Ls {
         target: ClusterLocation,
@@ -79,6 +88,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let config = config.load_or_default().await?;
             let mut reader = source.get_reader(&config).await?;
             destination.write_from_reader(&config, &mut reader).await?;
+        },
+        Command::HttpGateway {
+            cluster,
+            listen_addr,
+        } => {
+            let config = config.load_or_default().await?;
+            let cluster = config.get_cluster(&cluster).await?;
+            let (_socket, server) = warp::serve(cluster_filter(cluster))
+                .try_bind_with_graceful_shutdown(listen_addr, async {
+                    let _ = tokio::signal::ctrl_c().await;
+                })?;
+            server.await;
         },
         Command::Ls { target } => {
             let config = config.load_or_default().await?;
