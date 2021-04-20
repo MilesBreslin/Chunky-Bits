@@ -56,6 +56,14 @@ impl FileReference {
         FileReadBuilder::new(self)
     }
 
+    pub async fn verify_owned(self) -> VerifyFileReportOwned {
+        let file = Box::pin(self);
+        let file_ref: Pin<&FileReference> = file.as_ref();
+        let report: VerifyFileReport = file_ref.verify().await;
+        let report: VerifyFileReport<'static> = unsafe { std::mem::transmute(report) };
+        VerifyFileReportOwned { report, file }
+    }
+
     pub async fn verify(&self) -> VerifyFileReport<'_> {
         VerifyFileReport {
             part_reports: self
@@ -73,14 +81,10 @@ impl FileReference {
         D: CollectionDestination + Send + Sync + 'static,
     {
         let mut file = Box::pin(self);
-        let mut file_ref = file.as_mut();
+        let mut file_ref: Pin<&mut FileReference> = file.as_mut();
         let report: ResilverFileReport = file_ref.resilver(destination).await;
-        let report_owned = ResilverFileReportOwned {
-            // Set the lifetime of the report to be static
-            report: unsafe { std::mem::transmute(report) },
-            file,
-        };
-        report_owned
+        let report: ResilverFileReport<'static> = unsafe { std::mem::transmute(report) };
+        ResilverFileReportOwned { report, file }
     }
 
     pub async fn resilver<D>(&mut self, destination: Arc<D>) -> ResilverFileReport<'_>
@@ -99,30 +103,38 @@ impl FileReference {
     }
 }
 
-pub struct ResilverFileReportOwned {
-    file: Pin<Box<FileReference>>,
-    report: ResilverFileReport<'static>,
+// Owned reports are not allowed to produce references to 'static, only '_
+macro_rules! report_owned {
+    ($target:ident, $owned:ident) => {
+        pub struct $owned {
+            file: Pin<Box<FileReference>>,
+            report: $target<'static>,
+        }
+
+        impl Deref for $owned {
+            type Target = $target<'static>;
+
+            fn deref(&self) -> &Self::Target {
+                &self.as_ref()
+            }
+        }
+
+        impl AsRef<$target<'static>> for $owned {
+            fn as_ref(&self) -> &$target<'static> {
+                &self.report
+            }
+        }
+
+        impl AsRef<FileReference> for $owned {
+            fn as_ref(&self) -> &FileReference {
+                &self.file
+            }
+        }
+    };
 }
 
-impl Deref for ResilverFileReportOwned {
-    type Target = ResilverFileReport<'static>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.as_ref()
-    }
-}
-
-impl AsRef<ResilverFileReport<'static>> for ResilverFileReportOwned {
-    fn as_ref(&self) -> &ResilverFileReport<'static> {
-        &self.report
-    }
-}
-
-impl AsRef<FileReference> for ResilverFileReportOwned {
-    fn as_ref(&self) -> &FileReference {
-        &self.file
-    }
-}
+report_owned!(ResilverFileReport, ResilverFileReportOwned);
+report_owned!(VerifyFileReport, VerifyFileReportOwned);
 
 macro_rules! report_common {
     ($report_type:ident) => {
@@ -177,6 +189,17 @@ macro_rules! report_common {
 
 pub struct VerifyFileReport<'a> {
     part_reports: Vec<VerifyPartReport<'a>>,
+}
+
+impl fmt::Display for VerifyFileReport<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Verified {}/{} chunks",
+            self.healthy_chunks().count(),
+            self.chunks().count(),
+        )
+    }
 }
 
 impl VerifyFileReport<'_> {

@@ -18,6 +18,7 @@ use chunky_bits::{
         FileReference,
         Location,
         ResilverFileReportOwned,
+        VerifyFileReportOwned,
     },
 };
 use serde::{
@@ -142,6 +143,28 @@ impl ClusterLocation {
                 let file_ref = cluster.get_file_ref(&path).await?;
                 let destination = Arc::new(destination);
                 let report = file_ref.resilver_owned(destination).await;
+                Ok(report)
+            },
+            _ => Err(ErrorMessage::from("Resilver is only supported on cluster files").into()),
+        }
+    }
+
+    pub async fn verify(&self, config: &Config) -> Result<VerifyFileReportOwned, Box<dyn Error>> {
+        use ClusterLocation::*;
+        match self {
+            ClusterFile {
+                cluster: cluster_name,
+                path,
+            } => {
+                let cluster = config.get_cluster(&cluster_name).await?;
+                let file_ref = cluster.get_file_ref(&path).await?;
+                let report = file_ref.verify_owned().await;
+                Ok(report)
+            },
+            FileRef(loc) => {
+                let bytes = loc.read().await?;
+                let file_ref: FileReference = serde_yaml::from_slice(&bytes)?;
+                let report = file_ref.verify_owned().await;
                 Ok(report)
             },
             _ => Err(ErrorMessage::from("Resilver is only supported on cluster files").into()),
