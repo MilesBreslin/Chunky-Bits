@@ -12,8 +12,19 @@ pub mod error_message;
 use crate::{
     cluster_location::ClusterLocation,
     config::Config,
+    error_message::ErrorMessage,
 };
 
+/// An interface for Chunky Bits files and clusters.
+///
+/// This provides coreutils-like commands for accessing
+/// files. Many of these commands accept cluster locations,
+/// which are formatted `cluster-name#path/to/file`.
+///
+/// Instead of a cluster-name, you may also provide a location
+/// for the cluster definition to be read from. Both local
+/// file paths and http URL are supported.
+/// Example `./cluster.yml#path/to/file`.
 #[derive(StructOpt)]
 struct Opt {
     /// Location for the config file
@@ -25,31 +36,37 @@ struct Opt {
 
 #[derive(StructOpt)]
 enum Command {
+    /// Concatenate files together
     Cat {
-        target: ClusterLocation,
+        #[structopt(min_values(1))]
+        targets: Vec<ClusterLocation>,
     },
+    /// Show the parsed configuration definition
     ConfigInfo,
+    /// Show the parsed cluster definition
     ClusterInfo {
+        /// The name/location of the cluster to show
         cluster: String,
     },
+    /// Copy file from source to destination
     Cp {
         source: ClusterLocation,
         destination: ClusterLocation,
     },
+    /// Provide a HTTP Gateway for a cluster
     HttpGateway {
+        /// The name/location of the cluster to show
         cluster: String,
+        /// Listen Address to bind to
         #[structopt(short, long, default_value = "127.0.0.1:8000")]
         listen_addr: SocketAddr,
     },
-    Ls {
-        target: ClusterLocation,
-    },
-    Resilver {
-        target: ClusterLocation,
-    },
-    Verify {
-        target: ClusterLocation,
-    },
+    /// List the files in a cluster directory
+    Ls { target: ClusterLocation },
+    /// Resilver a cluster file
+    Resilver { target: ClusterLocation },
+    /// Verify a cluster file
+    Verify { target: ClusterLocation },
 }
 
 #[tokio::main]
@@ -67,10 +84,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let Opt { command, config } = Opt::from_args();
     let config = Config::builder().path(config);
     match command {
-        Command::Cat { target } => {
+        Command::Cat { targets } => {
+            if targets.len() == 0 {
+                return Err(ErrorMessage::from("At least 1 cat target must be specified").into());
+            }
             let config = config.load_or_default().await?;
-            let mut reader = target.get_reader(&config).await?;
-            io::copy(&mut reader, &mut io::stdout()).await?;
+            let mut stdout = io::stdout();
+            for target in targets {
+                let mut reader = target.get_reader(&config).await?;
+                io::copy(&mut reader, &mut stdout).await?;
+            }
         },
         Command::ConfigInfo => {
             let config = config.load_or_default().await?;
