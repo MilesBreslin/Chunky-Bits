@@ -2,7 +2,7 @@ use std::{
     cmp::Ordering,
     collections::{
         BTreeSet,
-        HashMap,
+        BTreeMap,
     },
 };
 
@@ -28,7 +28,7 @@ impl Into<BTreeSet<ClusterNode>> for ClusterNodes {
 enum ClusterNodesDeserializer {
     Single(ClusterNode),
     Set(Vec<ClusterNodesDeserializer>),
-    Map(HashMap<String, ClusterNodesDeserializer>),
+    Map(BTreeMap<String, ClusterNodesDeserializer>),
 }
 
 impl From<ClusterNodesDeserializer> for ClusterNodes {
@@ -46,9 +46,9 @@ impl From<ClusterNodesDeserializer> for ClusterNodes {
                 }
                 nodes_out
             },
-            Map(mut nodes) => {
+            Map(nodes) => {
                 let mut nodes_out = Vec::<ClusterNode>::new();
-                for (name, sub_nodes) in nodes.drain() {
+                for (name, sub_nodes) in nodes.into_iter() {
                     let nodes: ClusterNodes = sub_nodes.into();
                     for sub_node in nodes.0 {
                         let mut sub_node = sub_node.clone();
