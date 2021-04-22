@@ -42,11 +42,10 @@ jobs:
           mkdir -p tmpdir/{metadata/tmpdir,repo}
           dd if=/dev/urandom of=tmpdir/TESTFILE bs=256K count=201
       - name: Encode File
-        run: cargo run -- put --cluster examples/test.yaml tmpdir/TESTFILE
+        run: cargo run -- cp examples/test.yaml#tmpdir/TESTFILE tmpdir/TESTFILE
       - name: Decode File
         run: |
-          cargo run -- decode-file --file tmpdir/metadata/tmpdir/TESTFILE \
-            --destination tmpdir/TESTFILE.repair
+          cargo run -- cp @#tmpdir/metadata/tmpdir/TESTFILE tmpdir/TESTFILE.repair
       - name: Verify Integrity
         run: |
           ORIG="$(sha256sum tmpdir/TESTFILE | sed 's/ .*//')"
