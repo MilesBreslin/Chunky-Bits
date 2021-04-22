@@ -42,7 +42,7 @@ jobs:
           mkdir -p tmpdir/{metadata/tmpdir,repo}
           dd if=/dev/urandom of=tmpdir/TESTFILE bs=256K count=201
       - name: Encode File
-        run: cargo run -- cp examples/test.yaml#tmpdir/TESTFILE tmpdir/TESTFILE
+        run: cargo run -- cp tmpdir/TESTFILE examples/test.yaml#tmpdir/TESTFILE
       - name: Decode File
         run: |
           cargo run -- cp @#tmpdir/metadata/tmpdir/TESTFILE tmpdir/TESTFILE.repair
