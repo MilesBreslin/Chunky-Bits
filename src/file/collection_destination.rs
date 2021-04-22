@@ -10,6 +10,7 @@ use crate::{
         ShardError,
     },
     file::{
+        hash::AnyHash,
         Location,
         LocationContext,
         WeightedLocation,
@@ -52,7 +53,11 @@ impl CollectionDestination for Vec<WeightedLocation> {
 
 #[async_trait]
 pub trait ShardWriter {
-    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardError>;
+    async fn write_shard(
+        &mut self,
+        hash: &AnyHash,
+        bytes: &[u8],
+    ) -> Result<Vec<Location>, ShardError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -76,7 +81,7 @@ impl CollectionDestination for VoidDestination {
 impl ShardWriter for VoidDestination {
     async fn write_shard(
         &mut self,
-        _hash: &str,
+        _hash: &AnyHash,
         _bytes: &[u8],
     ) -> Result<Vec<Location>, ShardError> {
         Ok(vec![])

@@ -53,3 +53,9 @@ impl fmt::Display for Sha256Hash {
         write!(f, "{}", hex::encode(&self.0))
     }
 }
+
+impl AsRef<[u8]> for Sha256Hash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}

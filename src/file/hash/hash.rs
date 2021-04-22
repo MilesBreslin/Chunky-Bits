@@ -11,7 +11,7 @@ use tokio::task::{
 
 use super::Sha256Hash;
 
-pub trait DataHasher: Eq + Sized + Send + Sync + 'static {
+pub trait DataHasher: AsRef<[u8]> + Eq + Sized + Send + Sync + 'static {
     fn from_buf(data: &[u8]) -> Self;
     fn from_buf_async<T>(data: T) -> JoinHandle<(Self, T)>
     where
@@ -105,5 +105,14 @@ impl fmt::Display for AnyHash {
 impl From<Sha256Hash> for AnyHash {
     fn from(h: Sha256Hash) -> Self {
         AnyHash::Sha256(h)
+    }
+}
+
+impl AsRef<[u8]> for AnyHash {
+    fn as_ref(&self) -> &[u8] {
+        use AnyHash::*;
+        match self {
+            Sha256(h) => h.as_ref(),
+        }
     }
 }

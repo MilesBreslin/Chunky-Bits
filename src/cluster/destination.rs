@@ -1,10 +1,17 @@
 use std::{
     collections::HashSet,
+    iter::{
+        once,
+        repeat_with,
+    },
     ops::Deref,
     sync::Arc,
 };
 
-use tokio::sync::Mutex;
+use tokio::sync::{
+    oneshot,
+    Mutex,
+};
 
 use crate::{
     cluster::{
@@ -97,6 +104,7 @@ impl CollectionDestination for DestinationContainer {
             failed_indexes: HashSet::new(),
             zone_status: profile.zone_rules.clone(),
             errors: vec![],
+            rng: None,
         };
         for location in locations.iter() {
             if let Some(location) = location {
@@ -110,12 +118,24 @@ impl CollectionDestination for DestinationContainer {
                 }
             }
         }
-        let writer = ClusterWriter {
-            state: Arc::new(ClusterWriterState {
-                parent: self.clone(),
-                inner_state: Mutex::new(inner_state),
-            }),
-        };
-        Ok((0..count).map(|_| writer.clone()).collect())
+        let state = Arc::new(ClusterWriterState {
+            parent: self.clone(),
+            inner_state: Mutex::new(inner_state),
+        });
+
+        let (tx_waiters, rx_waiters): (Vec<_>, Vec<_>) =
+            repeat_with(|| oneshot::channel::<()>()).take(count).unzip();
+
+        let writers = once(None)
+            .chain(rx_waiters.into_iter().map(|x| Some(x)))
+            .zip(tx_waiters)
+            .map(|(rx, tx)| ClusterWriter {
+                state: state.clone(),
+                waiter: rx,
+                staller: Some(tx),
+            })
+            .collect();
+
+        Ok(writers)
     }
 }

@@ -9,6 +9,7 @@ use std::{
     },
     pin::Pin,
     str::FromStr,
+    string::ToString,
 };
 
 use async_trait::async_trait;
@@ -46,6 +47,7 @@ use crate::{
         ShardError,
     },
     file::{
+        hash::AnyHash,
         profiler::Profiler,
         ShardWriter,
     },
@@ -375,8 +377,12 @@ impl fmt::Display for Location {
 
 #[async_trait]
 impl ShardWriter for Location {
-    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardError> {
-        self.write_subfile(hash, bytes)
+    async fn write_shard(
+        &mut self,
+        hash: &AnyHash,
+        bytes: &[u8],
+    ) -> Result<Vec<Location>, ShardError> {
+        self.write_subfile(&hash.to_string(), bytes)
             .await
             .map(|location| vec![location])
     }

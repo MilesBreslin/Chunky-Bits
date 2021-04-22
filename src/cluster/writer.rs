@@ -3,15 +3,29 @@ use std::{
         HashMap,
         HashSet,
     },
+    string::ToString,
     sync::Arc,
 };
 
 use async_trait::async_trait;
 use rand::{
     self,
+    rngs::SmallRng,
     Rng,
+    SeedableRng,
 };
-use tokio::sync::Mutex;
+use tokio::{
+    pin,
+    select,
+    sync::{
+        oneshot,
+        Mutex,
+    },
+    time::{
+        sleep,
+        Duration,
+    },
+};
 
 use crate::{
     cluster::{
@@ -24,6 +38,7 @@ use crate::{
     },
     error::ShardError,
     file::{
+        hash::AnyHash,
         Location,
         ShardWriter,
     },
@@ -38,10 +53,11 @@ pub(super) struct ClusterWriterInnerState {
     pub failed_indexes: HashSet<usize>,
     pub zone_status: ZoneRules,
     pub errors: Vec<ShardError>,
+    pub rng: Option<SmallRng>,
 }
 
 impl ClusterWriterState {
-    async fn next_writer(&self) -> Result<(usize, &ClusterNode), ShardError> {
+    async fn next_writer(&self, hash: &AnyHash) -> Result<(usize, &ClusterNode), ShardError> {
         let DestinationInner { ref nodes, .. } = &*self.parent;
         let mut state = self.inner_state.lock().await;
         if state.available_indexes.len() == 0 {
@@ -61,7 +77,15 @@ impl ClusterWriterState {
                 .pop()
                 .unwrap_or(ShardError::NotEnoughAvailability));
         }
-        let sample = rand::thread_rng().gen_range(0..total_weight);
+
+        let rng = state.rng.get_or_insert_with(|| {
+            let mut seed_bytes: [u8; 32] = Default::default();
+            let hash_bytes: &[u8] = hash.as_ref();
+            seed_bytes.copy_from_slice(&hash_bytes[..32]);
+            SmallRng::from_seed(seed_bytes)
+        });
+
+        let sample = rng.gen_range(0..total_weight);
         let mut current_weight: usize = 0;
         for (index, node) in available_locations.iter() {
             current_weight += node.location.weight;
@@ -196,24 +220,48 @@ impl ClusterWriterInnerState {
     }
 }
 
-#[derive(Clone)]
 pub struct ClusterWriter {
     pub(super) state: Arc<ClusterWriterState>,
+    pub(super) waiter: Option<oneshot::Receiver<()>>,
+    pub(super) staller: Option<oneshot::Sender<()>>,
 }
 
 #[async_trait]
 impl ShardWriter for ClusterWriter {
-    async fn write_shard(&mut self, hash: &str, bytes: &[u8]) -> Result<Vec<Location>, ShardError> {
-        let state = &*self.state;
+    async fn write_shard(
+        &mut self,
+        hash: &AnyHash,
+        bytes: &[u8],
+    ) -> Result<Vec<Location>, ShardError> {
+        let ClusterWriter {
+            ref state,
+            ref mut waiter,
+            ref mut staller,
+        } = self;
         let DestinationInner {
             location_context: cx,
             ..
         } = &*state.parent;
+
+        if let Some(waiter) = waiter.take() {
+            let sleeper = sleep(Duration::from_millis(100));
+            pin!(sleeper);
+            select! {
+                _ = waiter => {},
+                _ = &mut sleeper => {},
+            }
+        }
+
         loop {
-            match state.next_writer().await {
+            let next_writer = state.next_writer(hash).await;
+            staller.take().map(|tx| tx.send(()));
+            match next_writer {
                 Ok((index, node)) => {
                     let writer = &node.location.location;
-                    match writer.write_subfile_with_context(cx, hash, bytes).await {
+                    match writer
+                        .write_subfile_with_context(cx, &hash.to_string(), bytes)
+                        .await
+                    {
                         Ok(loc) => {
                             return Ok(vec![loc]);
                         },

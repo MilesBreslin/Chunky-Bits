@@ -177,11 +177,11 @@ impl FilePart {
             .map(|(data, mut writer)| {
                 let error_tx = error_tx.pop().unwrap();
                 async move {
-                    let hash = Sha256Hash::from_buf(&data);
-                    let locations = writer.write_shard(&format!("{}", hash), &data).await;
+                    let hash = Sha256Hash::from_buf(&data).into();
+                    let locations = writer.write_shard(&hash, &data).await;
                     match locations {
                         Ok(locations) => Some(Chunk {
-                            hash: hash.into(),
+                            hash: hash,
                             locations,
                         }),
                         Err(err) => {
@@ -326,8 +326,7 @@ impl FilePart {
                     for (chunk, bytes) in iter_mut {
                         let mut writer = writers.pop().unwrap();
                         if let Some(bytes) = bytes {
-                            let hash = format!("{}", chunk.hash);
-                            match writer.write_shard(&hash, &bytes).await {
+                            match writer.write_shard(&chunk.hash, &bytes).await {
                                 Ok(locations) => {
                                     inner_write_results.push(Ok(locations.len()));
                                     chunk.locations.extend(locations);
