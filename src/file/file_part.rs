@@ -376,37 +376,89 @@ impl FilePart {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Integrity {
+pub trait Integrity {
+    fn is_ideal(&self) -> bool;
+    fn is_available(&self) -> bool;
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum LocationIntegrity {
     Valid,
+    Resilvered,
     Invalid,
     Unavailable,
 }
 
-impl fmt::Display for Integrity {
+impl fmt::Display for LocationIntegrity {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.serialize(f)
     }
 }
 
-pub struct VerifyPartReport<'a> {
-    file_part: &'a FilePart,
-    read_results: Vec<(&'a Chunk, &'a Location, Result<bool, LocationError>)>,
+impl Integrity for LocationIntegrity {
+    fn is_ideal(&self) -> bool {
+        use LocationIntegrity::*;
+        match self {
+            Valid | Resilvered => true,
+            Invalid | Unavailable => false,
+        }
+    }
+
+    fn is_available(&self) -> bool {
+        self.is_ideal()
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum FileIntegrity {
+    Valid,
+    Resilvered,
+    Degraded,
+    Unavailable,
+}
+
+impl fmt::Display for FileIntegrity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.serialize(f)
+    }
+}
+
+impl Integrity for FileIntegrity {
+    fn is_ideal(&self) -> bool {
+        use FileIntegrity::*;
+        match self {
+            Valid | Resilvered => true,
+            Degraded | Unavailable => false,
+        }
+    }
+
+    fn is_available(&self) -> bool {
+        use FileIntegrity::*;
+        match self {
+            Valid | Resilvered | Degraded => true,
+            Unavailable => false,
+        }
+    }
 }
 
 macro_rules! report_common {
     ($report_type:ident) => {
-        impl<'a> $report_type<'a> {
+        impl $report_type<'_> {
             /// Does the FilePart at least 1 valid location for each chunk
-            pub fn is_ok(&self) -> bool {
-                self.chunks().all(move |chunk| self.chunk_is_healthy(chunk))
+            pub fn is_ideal(&self) -> bool {
+                self.integrity().is_ideal()
             }
 
             pub fn is_available(&self) -> bool {
-                self.healthy_chunks().count() >= self.file_part.data.len()
+                self.integrity().is_available()
             }
 
-            pub fn chunks(&self) -> impl Iterator<Item = &Chunk> {
+            pub fn total_chunks(&self) -> usize {
+                let FilePart { data, parity, .. } = &self.file_part;
+                data.len() + parity.len()
+            }
+
+            fn chunks(&self) -> impl Iterator<Item = &Chunk> {
                 self.file_part
                     .data
                     .iter()
@@ -423,21 +475,6 @@ macro_rules! report_common {
                     .filter(move |chunk| !self.chunk_is_healthy(chunk))
             }
 
-            pub fn failed_read_chunks(&self) -> impl Iterator<Item = &Chunk> {
-                self.chunks().filter(move |chunk| {
-                    self.read_results
-                        .iter()
-                        .filter_map(|(read_chunk, _, result)| {
-                            result
-                                .as_ref()
-                                .ok()
-                                .map(|valid| valid.then(|| read_chunk))
-                                .flatten()
-                        })
-                        .any(|other_chunk| *chunk as *const _ == *other_chunk as *const _)
-                })
-            }
-
             pub fn unavailable_locations(
                 &self,
             ) -> impl Iterator<Item = (&Location, &LocationError)> {
@@ -450,34 +487,149 @@ macro_rules! report_common {
             }
 
             pub fn invalid_locations(&self) -> impl Iterator<Item = &Location> {
+                self.read_location_with_integrity()
+                    .filter_map(|(_, location, integrity)| {
+                        (integrity == LocationIntegrity::Invalid).then(|| location)
+                    })
+            }
+
+            pub fn locations_with_integrity(
+                &self,
+            ) -> impl Iterator<Item = (&Location, LocationIntegrity)> {
+                self.read_location_with_integrity()
+                    .map(|(_, location, integrity)| (location, integrity))
+            }
+
+            fn read_location_result(
+                &self,
+                location: &Location,
+            ) -> Option<&Result<bool, LocationError>> {
                 self.read_results
                     .iter()
-                    .filter_map(|(_, location, result)| match result {
-                        Ok(false) => Some(*location),
-                        _ => None,
+                    .filter_map(move |(_, read_location, result)| {
+                        let read_location: &Location = *read_location;
+                        (location as *const _ == read_location as *const _).then(|| result)
                     })
+                    .next()
+            }
+
+            fn read_location_with_integrity(
+                &self,
+            ) -> impl Iterator<Item = (&Chunk, &Location, LocationIntegrity)> {
+                self.read_results.iter().map(|(chunk, location, result)| {
+                    (*chunk, *location, Self::location_err_to_integrity(result))
+                })
+            }
+
+            fn location_err_to_integrity(err: &Result<bool, LocationError>) -> LocationIntegrity {
+                match err {
+                    Ok(true) => LocationIntegrity::Valid,
+                    Ok(false) => LocationIntegrity::Invalid,
+                    _ => LocationIntegrity::Unavailable,
+                }
+            }
+
+            fn chunk_is_healthy(&self, chunk: &Chunk) -> bool {
+                self.chunk_integrity(chunk) == LocationIntegrity::Valid
+            }
+
+            fn chunk_read_results<'a>(
+                &'a self,
+                chunk: &'a Chunk,
+            ) -> impl Iterator<Item = (&'a Location, &'a Result<bool, LocationError>)> {
+                self.read_results
+                    .iter()
+                    .filter_map(move |(read_chunk, location, result)| {
+                        let read_chunk: &Chunk = *read_chunk;
+                        (chunk as *const _ == read_chunk as *const _).then(|| (*location, result))
+                    })
+            }
+        }
+
+        impl AsRef<FilePart> for $report_type<'_> {
+            fn as_ref(&self) -> &FilePart {
+                &self.file_part
             }
         }
     };
 }
 
+pub struct VerifyPartReport<'a> {
+    file_part: &'a FilePart,
+    read_results: Vec<(&'a Chunk, &'a Location, Result<bool, LocationError>)>,
+}
+
+impl fmt::Display for VerifyPartReport<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}: {}/{} unhealthy chunks",
+            self.integrity(),
+            self.unhealthy_chunks().count(),
+            self.total_chunks(),
+        )
+    }
+}
+
 impl VerifyPartReport<'_> {
-    fn chunk_is_healthy(&self, chunk: &Chunk) -> bool {
-        let mut read_ok_chunks = self
-            .read_results
-            .iter()
-            .filter_map(|(read_chunk, _, result)| {
-                result
-                    .as_ref()
-                    .ok()
-                    .map(|valid| valid.then(|| read_chunk))
-                    .flatten()
-            });
-        read_ok_chunks.any(|other_chunk| chunk as *const _ == *other_chunk as *const _)
+    pub fn integrity(&self) -> FileIntegrity {
+        let data_chunks = self.file_part.data.len();
+        let parity_chunks = self.file_part.parity.len();
+        let total_chunks = data_chunks + parity_chunks;
+        match self.healthy_chunks().count() {
+            x if x == total_chunks => FileIntegrity::Valid,
+            x if x >= data_chunks => FileIntegrity::Degraded,
+            _ => FileIntegrity::Unavailable,
+        }
     }
 
-    pub fn full_report(&self) -> impl fmt::Display + '_ {
-        VerifyPartFullReport(&self)
+    fn chunk_integrity(&self, chunk: &Chunk) -> LocationIntegrity {
+        let mut chunk_integrity = LocationIntegrity::Unavailable;
+        let mut iter = self
+            .chunk_read_results(chunk)
+            .map(|(_, res)| Self::location_err_to_integrity(res));
+        while let Some(integrity) = iter.next() {
+            if integrity < chunk_integrity {
+                chunk_integrity = integrity
+            }
+            if integrity == LocationIntegrity::Valid {
+                break;
+            }
+        }
+        chunk_integrity
+    }
+
+    pub fn full_report(
+        &self,
+    ) -> (
+        FileIntegrity,
+        impl Iterator<
+            Item = (
+                &Chunk,
+                LocationIntegrity,
+                impl Iterator<Item = (&Location, LocationIntegrity, Option<&LocationError>)>,
+            ),
+        >,
+    ) {
+        (
+            self.integrity(),
+            self.chunks().map(move |chunk| {
+                (
+                    chunk,
+                    self.chunk_integrity(chunk),
+                    chunk.locations.iter().map(move |location| {
+                        let result = self.read_location_result(location).unwrap();
+                        let integrity = Self::location_err_to_integrity(result);
+                        let error = result.as_ref().err();
+                        (location, integrity, error)
+                    }),
+                )
+            }),
+        )
+    }
+
+    pub fn display_full_report(&self) -> impl fmt::Display + '_ {
+        VerifyPartFullReport(self)
     }
 }
 
@@ -487,17 +639,17 @@ struct VerifyPartFullReport<'a>(&'a VerifyPartReport<'a>);
 
 impl fmt::Display for VerifyPartFullReport<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for (chunk, location, result) in self.0.read_results.iter() {
-            let integrity = match result {
-                Ok(true) => Integrity::Valid,
-                Ok(false) => Integrity::Invalid,
-                Err(_) => Integrity::Unavailable,
-            };
-            write!(f, "{:11} {:64} {}", integrity, chunk.hash, location)?;
-            if let Err(err) = result {
-                write!(f, " {}", err)?;
+        let (part_integrity, chunks) = self.0.full_report();
+        writeln!(f, "part\t{}", part_integrity)?;
+        for (chunk, chunk_integrity, locations) in chunks {
+            writeln!(f, "chunk\t{}\t{}", chunk_integrity, chunk.hash)?;
+            for (location, loc_integrity, error) in locations {
+                if let Some(error) = error {
+                    writeln!(f, "location\t{}\t{}\t{}", loc_integrity, location, error)?;
+                } else {
+                    writeln!(f, "location\t{}\t{}", loc_integrity, location)?;
+                }
             }
-            write!(f, "\n")?;
         }
         Ok(())
     }
@@ -512,18 +664,12 @@ pub struct ResilverPartReport<'a> {
 
 impl fmt::Display for ResilverPartReport<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut errors = self.failed_writes().count();
-        if let Err(_) = &self.write_error {
-            errors += 1;
-        }
         write!(
             f,
-            "Resilvered {}/{} chunks with {} errors, resulting in {}/{} healthy chunks",
-            self.write_results.len(),
-            self.failed_read_chunks().count(),
-            errors,
-            self.healthy_chunks().count(),
-            self.chunks().count(),
+            "{}: {}/{} chunks modified",
+            self.integrity(),
+            self.successful_writes().count(),
+            self.total_chunks(),
         )
     }
 }
@@ -531,6 +677,23 @@ impl fmt::Display for ResilverPartReport<'_> {
 report_common!(ResilverPartReport);
 
 impl<'a> ResilverPartReport<'a> {
+    pub fn integrity(&self) -> FileIntegrity {
+        let data_chunks = self.file_part.data.len();
+        let parity_chunks = self.file_part.parity.len();
+        let total_chunks = data_chunks + parity_chunks;
+        match self.healthy_chunks().count() {
+            x if x == total_chunks => {
+                if self.successful_writes().count() > 1 {
+                    FileIntegrity::Resilvered
+                } else {
+                    FileIntegrity::Valid
+                }
+            },
+            x if x >= data_chunks => FileIntegrity::Degraded,
+            _ => FileIntegrity::Unavailable,
+        }
+    }
+
     pub fn rebuild_error(&self) -> Result<(), &FileWriteError> {
         match &self.write_error {
             Ok(()) => Ok(()),
@@ -561,23 +724,101 @@ impl<'a> ResilverPartReport<'a> {
             })
     }
 
-    fn chunk_is_healthy(&self, chunk: &Chunk) -> bool {
-        let write_ok_chunks = self
-            .write_results
-            .iter()
-            .filter_map(|(write_chunk, result)| result.as_ref().ok().map(|_| write_chunk));
-        let read_ok_chunks = self
-            .read_results
-            .iter()
-            .filter_map(|(read_chunk, _, result)| {
-                result
-                    .as_ref()
-                    .ok()
-                    .map(|valid| valid.then(|| read_chunk))
-                    .flatten()
-            });
-        write_ok_chunks
-            .chain(read_ok_chunks)
-            .any(|other_chunk| chunk as *const _ == *other_chunk as *const _)
+    fn chunk_integrity(&self, chunk: &Chunk) -> LocationIntegrity {
+        let mut chunk_integrity = LocationIntegrity::Unavailable;
+        let mut iter = self
+            .chunk_read_results(chunk)
+            .map(|(_, res)| Self::location_err_to_integrity(res));
+        while let Some(integrity) = iter.next() {
+            if integrity < chunk_integrity {
+                chunk_integrity = integrity
+            }
+            if integrity == LocationIntegrity::Valid {
+                return integrity;
+            }
+        }
+        let mut successful_writes =
+            self.write_results
+                .iter()
+                .filter_map(|(write_chunk, result)| {
+                    let write_chunk: &Chunk = write_chunk;
+                    (chunk as *const _ == write_chunk as *const _)
+                        .then(|| result.as_ref().ok())
+                        .flatten()
+                });
+        if let Some(_) = successful_writes.next() {
+            return LocationIntegrity::Valid;
+        };
+        chunk_integrity
+    }
+
+    pub fn full_report(
+        &self,
+    ) -> (
+        FileIntegrity,
+        &Result<(), FileWriteError>,
+        impl Iterator<
+            Item = (
+                &Chunk,
+                LocationIntegrity,
+                impl Iterator<Item = (&Location, LocationIntegrity, Option<&LocationError>)>,
+                impl Iterator<Item = &FileWriteError>,
+            ),
+        >,
+    ) {
+        (
+            self.integrity(),
+            &self.write_error,
+            self.chunks().map(move |chunk| {
+                (
+                    chunk,
+                    self.chunk_integrity(chunk),
+                    chunk.locations.iter().map(move |location| {
+                        let integrity;
+                        let error: Option<&LocationError>;
+                        if let Some(result) = self.read_location_result(location) {
+                            integrity = Self::location_err_to_integrity(result);
+                            error = result.as_ref().err();
+                        } else {
+                            integrity = LocationIntegrity::Valid;
+                            error = None;
+                        }
+                        (location, integrity, error)
+                    }),
+                    self.failed_writes(),
+                )
+            }),
+        )
+    }
+
+    pub fn display_full_report(&self) -> impl fmt::Display + '_ {
+        ResilverPartFullReport(self)
+    }
+}
+
+struct ResilverPartFullReport<'a>(&'a ResilverPartReport<'a>);
+
+impl fmt::Display for ResilverPartFullReport<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let (part_integrity, write_error, chunks) = self.0.full_report();
+        write!(f, "part\t{}", part_integrity)?;
+        if let Err(error) = write_error {
+            write!(f, "\t{}", error)?;
+        }
+        write!(f, "\n")?;
+        for (chunk, chunk_integrity, locations, failed_locations) in chunks {
+            writeln!(f, "chunk\t{}\t{}", chunk_integrity, chunk.hash)?;
+            for (location, loc_integrity, error) in locations {
+                if let Some(error) = error {
+                    writeln!(f, "location\t{}\t{}\t{}", loc_integrity, location, error)?;
+                } else {
+                    writeln!(f, "location\t{}\t{}", loc_integrity, location)?;
+                }
+            }
+            for error in failed_locations {
+                writeln!(f, "error\t{}", error)?;
+            }
+        }
+        Ok(())
     }
 }

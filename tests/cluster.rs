@@ -153,7 +153,7 @@ async fn test_resilver() -> Result<(), Box<dyn Error>> {
         .await?;
     let mut file_ref = cluster.get_file_ref("TESTFILE").await?;
     // File should be 100% Valid
-    assert!(file_ref.verify().await.is_ok());
+    assert!(file_ref.verify().await.is_ideal());
     let mut deleted_chunks: usize = 0;
     for part in file_ref.parts.iter_mut() {
         // Delete 1 / 3 data chunks
@@ -172,7 +172,7 @@ async fn test_resilver() -> Result<(), Box<dyn Error>> {
     }
     // File should not be 100% Valid
     let verify_report = file_ref.verify().await;
-    assert!(!verify_report.is_ok());
+    assert!(!verify_report.is_ideal());
     assert!(verify_report.is_available());
     assert!(verify_report.unavailable_locations().count() == deleted_chunks);
 
@@ -180,10 +180,10 @@ async fn test_resilver() -> Result<(), Box<dyn Error>> {
         .resilver(Arc::new(cluster.get_destination(&profile)))
         .await;
     // All of the parts should report no errors during resilver
-    assert!(resilver_report.is_ok());
+    assert!(resilver_report.is_ideal());
     assert!(resilver_report.new_locations().count() == deleted_chunks);
     // File should be 100% Valid
-    assert!(file_ref.verify().await.is_ok());
+    assert!(file_ref.verify().await.is_ideal());
     Ok(())
 }
 
@@ -198,7 +198,7 @@ async fn test_resilver_owned() -> Result<(), Box<dyn Error>> {
         .await?;
     let mut file_ref = cluster.get_file_ref("TESTFILE").await?;
     // File should be 100% Valid
-    assert!(file_ref.verify().await.is_ok());
+    assert!(file_ref.verify().await.is_ideal());
     let mut deleted_chunks: usize = 0;
     for part in file_ref.parts.iter_mut() {
         // Delete 1 / 3 data chunks
@@ -217,7 +217,7 @@ async fn test_resilver_owned() -> Result<(), Box<dyn Error>> {
     }
     // File should not be 100% Valid
     let verify_report = file_ref.verify().await;
-    assert!(!verify_report.is_ok());
+    assert!(!verify_report.is_ideal());
     assert!(verify_report.is_available());
     assert!(verify_report.unavailable_locations().count() == deleted_chunks);
 
@@ -225,7 +225,7 @@ async fn test_resilver_owned() -> Result<(), Box<dyn Error>> {
         .resilver_owned(Arc::new(cluster.get_destination(&profile)))
         .await;
     // All of the parts should report no errors during resilver
-    assert!(resilver_report.is_ok());
+    assert!(resilver_report.is_ideal());
     assert!(resilver_report.new_locations().count() == deleted_chunks);
     Ok(())
 }

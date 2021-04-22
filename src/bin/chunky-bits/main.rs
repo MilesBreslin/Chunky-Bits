@@ -134,12 +134,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Resilver { target } => {
             let config = config.load_or_default().await?;
             let report = target.resilver(&config).await?;
-            println!("{}", *report);
+            println!("{}", report.display_full_report());
         },
         Command::Verify { target } => {
             let config = config.load_or_default().await?;
             let report = target.verify(&config).await?;
-            println!("{}", *report);
+            println!("{}", report.display_full_report());
         },
     }
     Ok(())

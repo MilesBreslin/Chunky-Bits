@@ -97,7 +97,7 @@ impl fmt::Display for AnyHash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use AnyHash::*;
         match self {
-            Sha256(h) => write!(f, "sha256 {}", h),
+            Sha256(h) => write!(f, "sha256:{}", h),
         }
     }
 }
