@@ -1,9 +1,14 @@
 use std::{
+    collections::{
+        BTreeSet,
+        HashSet,
+    },
     net::SocketAddr,
     path::PathBuf,
 };
 
 use chunky_bits::http::cluster_filter;
+use futures::stream::StreamExt;
 use structopt::StructOpt;
 use tokio::io;
 pub mod cluster_location;
@@ -52,6 +57,16 @@ enum Command {
     Cp {
         source: ClusterLocation,
         destination: ClusterLocation,
+    },
+    /// Get all the known hashes for a location
+    GetHashes {
+        /// Deduplicate all hashes
+        #[structopt(short, long = "dedup")]
+        deduplicate: bool,
+        /// Sort all hashes (Implies --dedup)
+        #[structopt(short, long)]
+        sort: bool,
+        target: ClusterLocation,
     },
     /// Provide a HTTP Gateway for a cluster
     HttpGateway {
@@ -111,6 +126,42 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let config = config.load_or_default().await?;
             let mut reader = source.get_reader(&config).await?;
             destination.write_from_reader(&config, &mut reader).await?;
+        },
+        Command::GetHashes {
+            deduplicate,
+            sort,
+            target,
+        } => {
+            let config = config.load_or_default().await?;
+            let mut hash_stream = target.get_hashes(&config).await?;
+            match (deduplicate, sort) {
+                (_, true) => {
+                    let mut hashes = BTreeSet::new();
+                    while let Some(hash) = hash_stream.next().await {
+                        hashes.insert(hash?);
+                    }
+                    for hash in hashes {
+                        println!("{}", hash);
+                    }
+                },
+                (true, false) => {
+                    let mut hashes = HashSet::new();
+                    while let Some(hash) = hash_stream.next().await {
+                        hashes.insert(hash?);
+                    }
+                    for hash in hashes {
+                        println!("{}", hash);
+                    }
+                },
+                (false, false) => {
+                    while let Some(result) = hash_stream.next().await {
+                        match result {
+                            Ok(hash) => println!("{}", hash),
+                            Err(err) => eprintln!("Error: {}", err),
+                        }
+                    }
+                },
+            }
         },
         Command::HttpGateway {
             cluster,

@@ -15,11 +15,19 @@ use std::{
 use chunky_bits::{
     cluster::FileOrDirectory,
     file::{
+        hash::AnyHash,
+        Chunk,
+        FilePart,
         FileReference,
         Location,
         ResilverFileReportOwned,
         VerifyFileReportOwned,
     },
+};
+use futures::stream::{
+    self,
+    BoxStream,
+    StreamExt,
 };
 use serde::{
     Deserialize,
@@ -167,7 +175,48 @@ impl ClusterLocation {
                 let report = file_ref.verify_owned().await;
                 Ok(report)
             },
-            _ => Err(ErrorMessage::from("Resilver is only supported on cluster files").into()),
+            _ => Err(ErrorMessage::from("Resilver is only supported on files").into()),
+        }
+    }
+
+    pub async fn get_hashes(
+        &self,
+        config: &Config,
+    ) -> Result<BoxStream<'_, Result<AnyHash, Box<dyn Error>>>, Box<dyn Error>> {
+        use ClusterLocation::*;
+        match self {
+            ClusterFile {
+                cluster: cluster_name,
+                path,
+            } => {
+                let cluster = config.get_cluster(&cluster_name).await?;
+                let file_ref = cluster.get_file_ref(&path).await?;
+                let iter =
+                    file_ref
+                        .parts
+                        .into_iter()
+                        .flat_map(|FilePart { data, parity, .. }| {
+                            data.into_iter()
+                                .chain(parity.into_iter())
+                                .map(|Chunk { hash, .. }| Ok(hash))
+                        });
+                Ok(stream::iter(iter).boxed())
+            },
+            FileRef(loc) => {
+                let bytes = loc.read().await?;
+                let file_ref: FileReference = serde_yaml::from_slice(&bytes)?;
+                let iter =
+                    file_ref
+                        .parts
+                        .into_iter()
+                        .flat_map(|FilePart { data, parity, .. }| {
+                            data.into_iter()
+                                .chain(parity.into_iter())
+                                .map(|Chunk { hash, .. }| Ok(hash))
+                        });
+                Ok(stream::iter(iter).boxed())
+            },
+            _ => Err(ErrorMessage::from("Get hashes is only supported on files").into()),
         }
     }
 }
