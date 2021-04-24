@@ -112,7 +112,7 @@ async fn not_enough_writers() -> Result<(), Box<dyn Error>> {
 
 #[tokio::test]
 async fn test_read_profiler() -> Result<(), Box<dyn Error>> {
-    let mut directories: Vec<TempDir> = vec![tempdir()?, tempdir()?, tempdir()?, tempdir()?];
+    let directories: Vec<TempDir> = vec![tempdir()?, tempdir()?, tempdir()?, tempdir()?];
     let locations: Vec<WeightedLocation> = directories
         .iter()
         .map(|dir| Location::from(dir.path()).into())

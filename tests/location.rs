@@ -1,5 +1,4 @@
 use std::{
-    convert::TryFrom,
     error::Error,
     str::FromStr,
 };
@@ -8,7 +7,6 @@ use chunky_bits::file::Location;
 use tempfile::tempdir;
 use tokio::io::{
     AsyncReadExt,
-    AsyncWriteExt,
 };
 use url::Url;
 
@@ -50,7 +48,7 @@ mod http_server {
         pub async fn kill(self) {
             let HttpServer(_, tx, handle) = self;
             drop(tx);
-            handle.await;
+            let _ = handle.await;
         }
     }
     /// Port is required since the tests run in parallel
