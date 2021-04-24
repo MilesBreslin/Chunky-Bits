@@ -1,6 +1,7 @@
 use std::{
     fmt,
     hash::Hash,
+    ptr,
     sync::Arc,
 };
 
@@ -112,10 +113,8 @@ impl FilePart {
             .chain(self.parity.iter())
             .map(|_| None)
             .collect();
-        for indexed_chunk in indexed_chunks.drain(..) {
-            if let Some((index, chunk)) = indexed_chunk {
-                *all_read_chunks.get_mut(index).unwrap() = Some(chunk);
-            }
+        for (index, chunk) in indexed_chunks.drain(..).flatten() {
+            *all_read_chunks.get_mut(index).unwrap() = Some(chunk);
         }
         if !all_read_chunks
             .iter()
@@ -171,7 +170,7 @@ impl FilePart {
         // Hash and write all chunks
         let chunk_stream = data_chunks
             .iter()
-            .map(|slice| -> &[u8] { *slice })
+            .copied()
             .chain(parity_chunks.iter().map(|vec| vec.as_slice()))
             .zip(writers.drain(..))
             .map(|(data, mut writer)| {
@@ -180,10 +179,7 @@ impl FilePart {
                     let hash = Sha256Hash::from_buf(&data).into();
                     let locations = writer.write_shard(&hash, &data).await;
                     match locations {
-                        Ok(locations) => Some(Chunk {
-                            hash: hash,
-                            locations,
-                        }),
+                        Ok(locations) => Some(Chunk { hash, locations }),
                         Err(err) => {
                             let _ = error_tx.send(err.into());
                             None
@@ -258,10 +254,10 @@ impl FilePart {
             ..
         } = self;
 
-        let (mut data_bufs, read_report): (
-            Vec<Option<Vec<u8>>>,
-            Vec<Vec<Result<bool, LocationError>>>,
-        ) = data
+        type DataBufs = Vec<Option<Vec<u8>>>;
+        type ReadReport = Vec<Vec<Result<bool, LocationError>>>;
+
+        let (mut data_bufs, read_report): (DataBufs, ReadReport) = data
             .iter()
             .chain(parity.iter())
             .map(|chunk| async move {
@@ -352,7 +348,7 @@ impl FilePart {
                     }
                 },
                 Err(err) => {
-                    write_error = Err(err.into());
+                    write_error = Err(err);
                 },
             }
         }
@@ -584,10 +580,10 @@ impl VerifyPartReport<'_> {
 
     fn chunk_integrity(&self, chunk: &Chunk) -> LocationIntegrity {
         let mut chunk_integrity = LocationIntegrity::Unavailable;
-        let mut iter = self
+        let iter = self
             .chunk_read_results(chunk)
             .map(|(_, res)| Self::location_err_to_integrity(res));
-        while let Some(integrity) = iter.next() {
+        for integrity in iter {
             if integrity < chunk_integrity {
                 chunk_integrity = integrity
             }
@@ -702,7 +698,7 @@ impl<'a> ResilverPartReport<'a> {
 
     pub fn new_locations(&self) -> impl Iterator<Item = &Location> {
         self.successful_writes()
-            .flat_map(|locations| locations.iter().map(|location| *location))
+            .flat_map(|locations| locations.iter().copied())
     }
 
     pub fn successful_writes(&self) -> impl Iterator<Item = &[&Location]> {
@@ -725,10 +721,10 @@ impl<'a> ResilverPartReport<'a> {
 
     fn chunk_integrity(&self, chunk: &Chunk) -> LocationIntegrity {
         let mut chunk_integrity = LocationIntegrity::Unavailable;
-        let mut iter = self
+        let iter = self
             .chunk_read_results(chunk)
             .map(|(_, res)| Self::location_err_to_integrity(res));
-        while let Some(integrity) = iter.next() {
+        for integrity in iter {
             if integrity < chunk_integrity {
                 chunk_integrity = integrity
             }
@@ -741,11 +737,11 @@ impl<'a> ResilverPartReport<'a> {
                 .iter()
                 .filter_map(|(write_chunk, result)| {
                     let write_chunk: &Chunk = write_chunk;
-                    (chunk as *const _ == write_chunk as *const _)
+                    ptr::eq(chunk, write_chunk)
                         .then(|| result.as_ref().ok())
                         .flatten()
                 });
-        if let Some(_) = successful_writes.next() {
+        if successful_writes.next().is_some() {
             return LocationIntegrity::Valid;
         };
         chunk_integrity
@@ -804,7 +800,7 @@ impl fmt::Display for ResilverPartFullReport<'_> {
         if let Err(error) = write_error {
             write!(f, "\t{}", error)?;
         }
-        write!(f, "\n")?;
+        writeln!(f)?;
         for (chunk, chunk_integrity, locations, failed_locations) in chunks {
             writeln!(f, "chunk\t{}\t{}", chunk_integrity, chunk.hash)?;
             for (location, loc_integrity, error) in locations {

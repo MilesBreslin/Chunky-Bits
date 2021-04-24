@@ -20,7 +20,7 @@ impl ErrorMessage {
 }
 impl<T: AsRef<str>> From<T> for ErrorMessage {
     fn from(msg: T) -> Self {
-        ErrorMessage(format!("{}", msg.as_ref()))
+        ErrorMessage(msg.as_ref().to_string())
     }
 }
 impl Display for ErrorMessage {

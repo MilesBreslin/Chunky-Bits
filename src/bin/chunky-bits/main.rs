@@ -85,7 +85,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::builder().path(config);
     match command {
         Command::Cat { targets } => {
-            if targets.len() == 0 {
+            if targets.is_empty() {
                 return Err(ErrorMessage::from("At least 1 cat target must be specified").into());
             }
             let config = config.load_or_default().await?;

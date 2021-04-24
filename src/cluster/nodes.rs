@@ -1,8 +1,8 @@
 use std::{
     cmp::Ordering,
     collections::{
-        BTreeSet,
         BTreeMap,
+        BTreeSet,
     },
 };
 
@@ -17,9 +17,9 @@ use crate::file::WeightedLocation;
 #[serde(from = "ClusterNodesDeserializer")]
 pub struct ClusterNodes(pub Vec<ClusterNode>);
 
-impl Into<BTreeSet<ClusterNode>> for ClusterNodes {
-    fn into(mut self) -> BTreeSet<ClusterNode> {
-        self.0.drain(..).collect()
+impl From<ClusterNodes> for BTreeSet<ClusterNode> {
+    fn from(c: ClusterNodes) -> BTreeSet<ClusterNode> {
+        c.0.into_iter().collect()
     }
 }
 

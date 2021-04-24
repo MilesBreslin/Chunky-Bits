@@ -84,7 +84,7 @@ impl Cluster {
         let destination = self.get_destination(profile);
         FileReference::write_builder()
             .destination(destination)
-            .chunk_size((1 as usize) << profile.get_chunk_size())
+            .chunk_size((1_usize) << profile.get_chunk_size())
             .data_chunks(profile.get_data_chunks())
     }
 
@@ -126,7 +126,7 @@ impl Cluster {
         let (reporter, destination) = self.get_destination_with_profiler(profile);
         let result = FileReference::write_builder()
             .destination(destination)
-            .chunk_size((1 as usize) << profile.get_chunk_size())
+            .chunk_size((1_usize) << profile.get_chunk_size())
             .data_chunks(profile.get_data_chunks())
             .parity_chunks(profile.get_parity_chunks())
             .write(reader)

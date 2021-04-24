@@ -29,7 +29,7 @@ async fn index_get(
 ) -> Result<Response<Body>, Infallible> {
     Ok(match cluster.get_file_ref(path.as_str()).await {
         Ok(file_ref) => {
-            let length = file_ref.length.clone();
+            let length = file_ref.length;
             let content_type = file_ref.content_type.clone();
             let stream = file_ref.read_builder_owned().stream_reader_owned();
             let mut response_builder = Response::builder().status(StatusCode::OK);

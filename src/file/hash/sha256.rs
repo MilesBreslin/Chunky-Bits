@@ -20,7 +20,7 @@ pub struct Sha256Hash(#[serde(with = "hex")] [u8; 32]);
 impl DataHasher for Sha256Hash {
     fn from_buf(buf: &[u8]) -> Self {
         let mut ret = Sha256Hash(Default::default());
-        ret.0.copy_from_slice(&Sha256::digest(buf.as_ref())[..]);
+        ret.0.copy_from_slice(&Sha256::digest(buf));
         ret
     }
 }

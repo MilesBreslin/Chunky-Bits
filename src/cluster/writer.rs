@@ -60,7 +60,7 @@ impl ClusterWriterState {
     async fn next_writer(&self, hash: &AnyHash) -> Result<(usize, &ClusterNode), ShardError> {
         let DestinationInner { ref nodes, .. } = &*self.parent;
         let mut state = self.inner_state.lock().await;
-        if state.available_indexes.len() == 0 {
+        if state.available_indexes.is_empty() {
             return Err(state
                 .errors
                 .pop()
@@ -97,7 +97,7 @@ impl ClusterWriterState {
         panic!("Invalid writer sample")
     }
 
-    async fn invalidate_index(&self, index: usize, err: ShardError) -> () {
+    async fn invalidate_index(&self, index: usize, err: ShardError) {
         let DestinationInner { nodes, .. } = &*self.parent;
         let mut state = self.inner_state.lock().await;
         state.failed_indexes.insert(index);
@@ -170,17 +170,17 @@ impl ClusterWriterInnerState {
             .iter()
             .enumerate()
             .filter(|(i, node)| {
-                if required_zones.len() > 0 {
+                if !required_zones.is_empty() {
                     let is_required = required_zones.iter().any(|zone| node.zones.contains(*zone));
                     if !is_required {
                         return false;
                     }
-                } else if banned_zones.len() > 0 {
+                } else if !banned_zones.is_empty() {
                     let is_banned = banned_zones.iter().any(|zone| node.zones.contains(*zone));
                     if !is_banned {
                         return false;
                     }
-                } else if ideal_zones.len() > 0 {
+                } else if !ideal_zones.is_empty() {
                     let is_ideal = ideal_zones.iter().any(|zone| node.zones.contains(*zone));
                     if !is_ideal {
                         return false;

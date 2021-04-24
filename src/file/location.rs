@@ -100,7 +100,7 @@ impl Location {
                 Ok(bytes) => Ok(bytes),
                 Err(err) => Err(err.into()),
             },
-            Http(url) => match http_client.get(Into::<Url>::into(url.clone())).send().await {
+            Http(url) => match http_client.get(Url::from(url.clone())).send().await {
                 Ok(resp) => match resp.bytes().await {
                     Ok(bytes) => Ok(bytes.into_iter().collect()),
                     Err(err) => Err(err.into()),
@@ -165,7 +165,7 @@ impl Location {
                 },
                 Http(url) => {
                     let response = http_client
-                        .put(Into::<Url>::into(url.clone()))
+                        .put(Url::from(url.clone()))
                         .body(bytes.into())
                         .send()
                         .await;
@@ -204,10 +204,7 @@ impl Location {
                 let response = tokio::spawn(async move {
                     let LocationContext { http_client, .. } = cx;
                     let s = stream::unfold(rx, |mut rx| async move {
-                        match rx.recv().await {
-                            Some(result) => Some((result, rx)),
-                            None => None,
-                        }
+                        rx.recv().await.map(|result| (result, rx))
                     });
                     http_client.put(url).body(Body::wrap_stream(s)).send().await
                 });
@@ -221,7 +218,7 @@ impl Location {
                         Ok(length) => {
                             total_bytes += length as u64;
                             let buf: &[u8] = &bytes[0..length];
-                            if let Err(_) = tx.send(Ok(buf.to_owned())).await {
+                            if tx.send(Ok(buf.to_owned())).await.is_err() {
                                 break;
                             }
                         },
@@ -265,7 +262,7 @@ impl Location {
             Ok(_) => Ok(target_location),
             Err(err) => Err(ShardError::LocationError {
                 location: target_location,
-                error: err.into(),
+                error: err,
             }),
         }
     }
@@ -430,13 +427,13 @@ impl FromStr for HttpUrl {
     type Err = LocationParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self::try_from(Url::from_str(s)?)?)
+        Self::try_from(Url::from_str(s)?)
     }
 }
 
-impl Into<Url> for HttpUrl {
-    fn into(self) -> Url {
-        self.0
+impl From<HttpUrl> for Url {
+    fn from(h: HttpUrl) -> Self {
+        h.0
     }
 }
 

@@ -74,8 +74,7 @@ impl Config {
                     let cluster = Cluster::from_location(loc.clone())
                         .await
                         .map_err(ErrorMessage::with_prefix(target))?;
-                    let cluster = Arc::new(cluster);
-                    cluster
+                    Arc::new(cluster)
                 },
             };
         } else {
@@ -121,7 +120,7 @@ impl ConfigBuilder {
     }
 
     pub async fn load_or_default(self) -> Result<Config, Box<dyn Error>> {
-        if let Some(_) = &self.path {
+        if self.path.is_some() {
             self.load().await
         } else {
             match self.load().await {

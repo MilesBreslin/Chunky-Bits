@@ -5,9 +5,7 @@ use std::{
 
 use chunky_bits::file::Location;
 use tempfile::tempdir;
-use tokio::io::{
-    AsyncReadExt,
-};
+use tokio::io::AsyncReadExt;
 use url::Url;
 
 const DEFAULT_PAYLOAD: &[u8] = "HELLO WORLD".as_bytes();

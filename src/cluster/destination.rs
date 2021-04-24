@@ -106,16 +106,14 @@ impl CollectionDestination for DestinationContainer {
             errors: vec![],
             rng: None,
         };
-        for location in locations.iter() {
-            if let Some(location) = location {
-                let parent_nodes = nodes
-                    .0
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, node)| node.location.location.is_parent_of(location));
-                for (index, node) in parent_nodes {
-                    inner_state.remove_availability(index, node);
-                }
+        for location in locations.iter().flatten() {
+            let parent_nodes = nodes
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.location.location.is_parent_of(location));
+            for (index, node) in parent_nodes {
+                inner_state.remove_availability(index, node);
             }
         }
         let state = Arc::new(ClusterWriterState {
@@ -124,10 +122,10 @@ impl CollectionDestination for DestinationContainer {
         });
 
         let (tx_waiters, rx_waiters): (Vec<_>, Vec<_>) =
-            repeat_with(|| oneshot::channel::<()>()).take(count).unzip();
+            repeat_with(oneshot::channel::<()>).take(count).unzip();
 
         let writers = once(None)
-            .chain(rx_waiters.into_iter().map(|x| Some(x)))
+            .chain(rx_waiters.into_iter().map(Some))
             .zip(tx_waiters)
             .map(|(rx, tx)| ClusterWriter {
                 state: state.clone(),

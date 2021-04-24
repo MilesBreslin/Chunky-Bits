@@ -162,13 +162,11 @@ impl MetadataPath {
 
     fn sub_path(&self, path: impl AsRef<Path>) -> PathBuf {
         let mut new_path = self.path.clone();
-        new_path.extend(path.as_ref().components().filter(|c| {
-            if let Component::Normal(_) = c {
-                true
-            } else {
-                false
-            }
-        }));
+        new_path.extend(
+            path.as_ref()
+                .components()
+                .filter(|c| matches!(c, Component::Normal(_))),
+        );
         new_path
     }
 }
@@ -275,10 +273,10 @@ impl AsMut<PathBuf> for FileOrDirectory {
     }
 }
 
-impl Into<PathBuf> for FileOrDirectory {
-    fn into(self) -> PathBuf {
+impl From<FileOrDirectory> for PathBuf {
+    fn from(f: FileOrDirectory) -> Self {
         use FileOrDirectory::*;
-        match self {
+        match f {
             File(path) => path,
             Directory(path) => path,
         }

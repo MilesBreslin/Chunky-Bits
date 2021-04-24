@@ -36,7 +36,7 @@ impl ClusterProfiles {
         profile: ClusterProfile,
     ) -> Option<ClusterProfile> {
         let name = name.into();
-        match name.as_ref().map(|s| s.as_str()) {
+        match name.as_deref() {
             Some("default") | None => {
                 let mut profile = profile;
                 swap(&mut self.default, &mut profile);
@@ -67,15 +67,15 @@ pub struct ClusterProfile {
 
 impl ClusterProfile {
     pub fn get_chunk_size(&self) -> usize {
-        self.chunk_size.clone().into()
+        self.chunk_size.into()
     }
 
     pub fn get_data_chunks(&self) -> usize {
-        self.data_chunks.clone().into()
+        self.data_chunks.into()
     }
 
     pub fn get_parity_chunks(&self) -> usize {
-        self.parity_chunks.clone().into()
+        self.parity_chunks.into()
     }
 }
 

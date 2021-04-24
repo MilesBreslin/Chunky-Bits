@@ -83,7 +83,7 @@ impl ClusterLocation {
                 let cluster = config.get_cluster(&cluster_name).await?;
                 let profile_name = config.get_profile(&cluster_name).await;
                 let profile = cluster
-                    .get_profile(profile_name.as_ref().map(String::as_str))
+                    .get_profile(profile_name.as_deref())
                     .ok_or_else(|| {
                         ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap()))
                     })?;
@@ -135,7 +135,7 @@ impl ClusterLocation {
                 let cluster = config.get_cluster(&cluster_name).await?;
                 let profile_name = config.get_profile(&cluster_name).await;
                 let profile = cluster
-                    .get_profile(profile_name.as_ref().map(String::as_str))
+                    .get_profile(profile_name.as_deref())
                     .ok_or_else(|| {
                         ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap()))
                     })?;
@@ -176,7 +176,7 @@ impl FromStr for ClusterLocation {
     type Err = Box<dyn Error>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut split = s.split("#");
+        let mut split = s.split('#');
         match (split.next(), split.next(), split.next()) {
             (Some("@"), Some(path), None) => {
                 Ok(ClusterLocation::FileRef(Location::from_str(path)?))
@@ -214,9 +214,9 @@ impl fmt::Display for ClusterLocation {
     }
 }
 
-impl Into<String> for ClusterLocation {
-    fn into(self) -> String {
-        self.to_string()
+impl From<ClusterLocation> for String {
+    fn from(c: ClusterLocation) -> Self {
+        c.to_string()
     }
 }
 

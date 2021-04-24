@@ -59,6 +59,12 @@ impl Default for FileWriteBuilderState {
     }
 }
 
+impl<D: Default> Default for FileWriteBuilder<D> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<D> FileWriteBuilder<D> {
     pub fn new() -> FileWriteBuilder<D>
     where
@@ -82,7 +88,7 @@ impl<D> FileWriteBuilder<D> {
         DN: CollectionDestination + Send + Sync + 'static,
     {
         FileWriteBuilder {
-            destination: destination,
+            destination,
             state: self.state,
         }
     }
@@ -126,7 +132,7 @@ where
             data,
             parity,
             concurrency,
-        } = self.state.clone();
+        } = self.state;
         assert!(concurrency > 1);
 
         let encoder: Arc<ReedSolomon<galois_8::Field>> = Arc::new(ReedSolomon::new(data, parity)?);
@@ -163,7 +169,7 @@ where
                             },
                         };
                     },
-                    part = pending_parts.next(), if pending_parts.len() > 0 => {
+                    part = pending_parts.next(), if !pending_parts.is_empty() => {
                         if let Some(Ok(part)) = part {
                             parts.push(part);
                         }
@@ -193,7 +199,7 @@ where
                 // read_exact, but handle end-of-file
                 {
                     let mut buf = &mut data_buf[..];
-                    while buf.len() != 0 {
+                    while !buf.is_empty() {
                         match reader.read(&mut buf).await {
                             Ok(bytes) if bytes > 0 => {
                                 bytes_read += bytes;
@@ -260,22 +266,15 @@ where
                 read_file.await
             },
         };
-        loop {
-            match error_rx.recv().await {
-                Some(err) => {
-                    return Err(err);
-                },
-                None => {
-                    break;
-                },
-            }
+        if let Some(err) = error_rx.recv().await {
+            return Err(err);
         }
         let parts = parts.await.unwrap();
         Ok(FileReference {
             content_type: None,
             compression: None,
             length: Some(total_bytes),
-            parts: parts,
+            parts,
         })
     }
 }

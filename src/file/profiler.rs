@@ -40,7 +40,7 @@ pub fn new_profiler() -> (Profiler, ProfileReporter) {
             select! {
                 _ = &mut drop_rx => {
                     let _ = profile_tx.send(profile);
-                    return ();
+                    return;
                 },
                 result = log_rx.recv() => {
                     match result {
@@ -49,7 +49,7 @@ pub fn new_profiler() -> (Profiler, ProfileReporter) {
                         },
                         None => {
                             let _ = profile_tx.send(profile);
-                            return ();
+                            return;
                         },
                     }
                 },
@@ -290,7 +290,7 @@ impl ProfileReport {
     fn average_duration(mut durations: impl Iterator<Item = Duration>) -> Option<Duration> {
         if let Some(mut duration) = durations.next() {
             let mut count: u32 = 1;
-            while let Some(d) = durations.next() {
+            for d in durations {
                 duration += d;
                 count += 1;
             }

@@ -22,11 +22,11 @@ impl FromStr for WeightedLocation {
     type Err = <Location as FromStr>::Err;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut split_string = s.split(":");
+        let mut split_string = s.split(':');
         if let (Some(prefix), Some(postfix)) = (split_string.next(), split_string.next()) {
             if let Ok(weight) = prefix.parse::<usize>() {
                 return Ok(WeightedLocation {
-                    weight: weight,
+                    weight,
                     location: Location::from_str(postfix)?,
                 });
             }

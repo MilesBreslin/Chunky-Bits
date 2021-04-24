@@ -113,9 +113,9 @@ macro_rules! sized_uint {
     };
     (@Into<$($int:path),*> for $type:ident) => {
         $(
-            impl Into<$int> for $type {
-                fn into(self) -> $int {
-                    self.0 as $int
+            impl From<$type> for $int {
+                fn from(i: $type) -> Self {
+                    i.0 as $int
                 }
             }
         )*

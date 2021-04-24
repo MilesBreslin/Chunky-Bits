@@ -64,7 +64,7 @@ impl FileReference {
         let file_ref: Pin<&FileReference> = file.as_ref();
         let report: VerifyFileReport = file_ref.verify().await;
         let report: VerifyFileReport<'static> = unsafe { std::mem::transmute(report) };
-        VerifyFileReportOwned { report, file }
+        VerifyFileReportOwned { file, report }
     }
 
     pub async fn verify(&self) -> VerifyFileReport<'_> {
@@ -86,7 +86,7 @@ impl FileReference {
         let mut file_ref: Pin<&mut FileReference> = file.as_mut();
         let report: ResilverFileReport = file_ref.resilver(destination).await;
         let report: ResilverFileReport<'static> = unsafe { std::mem::transmute(report) };
-        ResilverFileReportOwned { report, file }
+        ResilverFileReportOwned { file, report }
     }
 
     pub async fn resilver<D>(&mut self, destination: Arc<D>) -> ResilverFileReport<'_>
