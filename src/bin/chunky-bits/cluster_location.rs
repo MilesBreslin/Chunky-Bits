@@ -100,7 +100,11 @@ impl ClusterLocation {
                 Ok(file_ref.length.unwrap())
             },
             FileRef(loc) => {
-                let file_ref = FileReference::write_builder().write(reader).await?;
+                let destination = config.get_default_destination().await?;
+                let file_ref = FileReference::write_builder()
+                    .destination(destination)
+                    .write(reader)
+                    .await?;
                 let file_str = serde_json::to_string_pretty(&file_ref)?;
                 loc.write(file_str.as_bytes()).await?;
                 Ok(file_ref.length.unwrap())
@@ -150,6 +154,13 @@ impl ClusterLocation {
                 let destination = cluster.get_destination(&profile);
                 let file_ref = cluster.get_file_ref(&path).await?;
                 let destination = Arc::new(destination);
+                let report = file_ref.resilver_owned(destination).await;
+                Ok(report)
+            },
+            FileRef(loc) => {
+                let bytes = loc.read().await?;
+                let file_ref: FileReference = serde_yaml::from_slice(&bytes)?;
+                let destination = config.get_default_destination().await?;
                 let report = file_ref.resilver_owned(destination).await;
                 Ok(report)
             },

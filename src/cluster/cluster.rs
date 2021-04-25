@@ -29,7 +29,7 @@ use crate::{
         ClusterNodes,
         ClusterProfile,
         ClusterProfiles,
-        DestinationContainer,
+        Destination,
         DestinationInner,
         FileOrDirectory,
         MetadataFormat,
@@ -45,7 +45,6 @@ use crate::{
         hash::AnyHash,
         new_profiler,
         Chunk,
-        CollectionDestination,
         FilePart,
         FileReference,
         FileWriteBuilder,
@@ -77,10 +76,7 @@ impl Cluster {
         MetadataFormat::Yaml.from_location(location).await
     }
 
-    pub fn get_file_writer(
-        &self,
-        profile: &ClusterProfile,
-    ) -> FileWriteBuilder<impl CollectionDestination + Send + Sync> {
+    pub fn get_file_writer(&self, profile: &ClusterProfile) -> FileWriteBuilder<Destination> {
         let destination = self.get_destination(profile);
         FileReference::write_builder()
             .destination(destination)
@@ -157,21 +153,19 @@ impl Cluster {
         Ok(reader)
     }
 
-    pub fn get_destination(
-        &self,
-        profile: &ClusterProfile,
-    ) -> impl CollectionDestination + Send + Sync {
-        DestinationContainer::from(DestinationInner {
+    pub fn get_destination(&self, profile: &ClusterProfile) -> Destination {
+        let inner = DestinationInner {
             nodes: self.destinations.clone(),
             location_context: self.tunables.as_ref().clone(),
             profile: profile.clone(),
-        })
+        };
+        Destination(inner.into())
     }
 
     pub fn get_destination_with_profiler(
         &self,
         profile: &ClusterProfile,
-    ) -> (ProfileReporter, impl CollectionDestination + Send + Sync) {
+    ) -> (ProfileReporter, Destination) {
         let (profiler, reporter) = new_profiler();
         let location_context = self
             .tunables
@@ -180,11 +174,14 @@ impl Cluster {
             .build();
         (
             reporter,
-            DestinationContainer::from(DestinationInner {
-                nodes: self.destinations.clone(),
-                location_context,
-                profile: profile.clone(),
-            }),
+            Destination(
+                DestinationInner {
+                    nodes: self.destinations.clone(),
+                    location_context,
+                    profile: profile.clone(),
+                }
+                .into(),
+            ),
         )
     }
 

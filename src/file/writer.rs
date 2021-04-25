@@ -36,7 +36,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct FileWriteBuilder<D> {
-    destination: Arc<D>,
+    destination: D,
     state: FileWriteBuilderState,
 }
 
@@ -71,21 +71,14 @@ impl<D> FileWriteBuilder<D> {
         D: Default,
     {
         FileWriteBuilder {
-            destination: Arc::new(Default::default()),
+            destination: Default::default(),
             state: Default::default(),
         }
     }
 
     pub fn destination<DN>(self, destination: DN) -> FileWriteBuilder<DN>
     where
-        DN: CollectionDestination + Send + Sync + 'static,
-    {
-        self.destination_arc(Arc::new(destination))
-    }
-
-    pub fn destination_arc<DN>(self, destination: Arc<DN>) -> FileWriteBuilder<DN>
-    where
-        DN: CollectionDestination + Send + Sync + 'static,
+        DN: CollectionDestination + Clone + Send + Sync + 'static,
     {
         FileWriteBuilder {
             destination,
@@ -120,7 +113,7 @@ impl<D> FileWriteBuilder<D> {
 
 impl<D> FileWriteBuilder<D>
 where
-    D: CollectionDestination + Send + Sync + 'static,
+    D: CollectionDestination + Clone + Send + Sync + 'static,
 {
     pub async fn write(
         &self,

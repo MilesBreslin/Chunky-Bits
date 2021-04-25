@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{
     Deserialize,
@@ -18,7 +20,7 @@ use crate::{
 };
 
 pub trait CollectionDestination {
-    type Writer: ShardWriter + Send + Sync;
+    type Writer: ShardWriter + Send + Sync + 'static;
     fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError>;
     fn get_used_writers(
         &self,
@@ -29,6 +31,25 @@ pub trait CollectionDestination {
     }
     fn get_context(&self) -> LocationContext {
         Default::default()
+    }
+}
+
+impl<T: CollectionDestination> CollectionDestination for Arc<T> {
+    type Writer = <T as CollectionDestination>::Writer;
+
+    fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError> {
+        <T as CollectionDestination>::get_writers(&self, count)
+    }
+
+    fn get_used_writers(
+        &self,
+        locations: &[Option<&Location>],
+    ) -> Result<Vec<Self::Writer>, FileWriteError> {
+        <T as CollectionDestination>::get_used_writers(&self, locations)
+    }
+
+    fn get_context(&self) -> LocationContext {
+        <T as CollectionDestination>::get_context(&self)
     }
 }
 
@@ -60,6 +81,17 @@ pub trait ShardWriter {
     ) -> Result<Vec<Location>, ShardError>;
 }
 
+#[async_trait]
+impl ShardWriter for Box<dyn ShardWriter + Send + Sync> {
+    async fn write_shard(
+        &mut self,
+        hash: &AnyHash,
+        bytes: &[u8],
+    ) -> Result<Vec<Location>, ShardError> {
+        self.as_mut().write_shard(hash, bytes).await
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Compression {}
 
@@ -70,7 +102,7 @@ pub enum Encryption {}
 pub type VoidDestination = ();
 
 impl CollectionDestination for VoidDestination {
-    type Writer = VoidDestination;
+    type Writer = ();
 
     fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError> {
         Ok(vec![(); count])
@@ -78,7 +110,7 @@ impl CollectionDestination for VoidDestination {
 }
 
 #[async_trait]
-impl ShardWriter for VoidDestination {
+impl ShardWriter for () {
     async fn write_shard(
         &mut self,
         _hash: &AnyHash,

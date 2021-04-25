@@ -4,7 +4,6 @@ use std::{
         once,
         repeat_with,
     },
-    ops::Deref,
     sync::Arc,
 };
 
@@ -30,49 +29,26 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub(super) struct DestinationContainer(pub Arc<DestinationInner>);
-
-impl Deref for DestinationContainer {
-    type Target = DestinationInner;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-
-impl<T> AsRef<T> for DestinationContainer
-where
-    DestinationInner: AsRef<T>,
-{
-    fn as_ref(&self) -> &T {
-        self.0.as_ref().as_ref()
-    }
-}
-
-impl From<DestinationInner> for DestinationContainer {
-    fn from(inner: DestinationInner) -> Self {
-        DestinationContainer(Arc::new(inner))
-    }
-}
+pub struct Destination(pub(super) Arc<DestinationInner>);
 
 pub(super) struct DestinationInner {
-    pub location_context: LocationContext,
-    pub nodes: ClusterNodes,
-    pub profile: ClusterProfile,
+    pub(super) location_context: LocationContext,
+    pub(super) nodes: ClusterNodes,
+    pub(super) profile: ClusterProfile,
 }
 
-impl AsRef<ClusterNodes> for DestinationInner {
+impl AsRef<ClusterNodes> for Destination {
     fn as_ref(&self) -> &ClusterNodes {
-        &self.nodes
+        &self.0.nodes
     }
 }
-impl AsRef<ClusterProfile> for DestinationInner {
+impl AsRef<ClusterProfile> for Destination {
     fn as_ref(&self) -> &ClusterProfile {
-        &self.profile
+        &self.0.profile
     }
 }
 
-impl CollectionDestination for DestinationContainer {
+impl CollectionDestination for Destination {
     type Writer = ClusterWriter;
 
     fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError> {
@@ -117,7 +93,7 @@ impl CollectionDestination for DestinationContainer {
             }
         }
         let state = Arc::new(ClusterWriterState {
-            parent: self.clone(),
+            parent: self.0.clone(),
             inner_state: Mutex::new(inner_state),
         });
 

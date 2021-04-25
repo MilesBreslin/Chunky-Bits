@@ -19,7 +19,13 @@ use tokio::{
     sync::RwLock,
 };
 
-use crate::error_message::ErrorMessage;
+use crate::{
+    any_destination::{
+        AnyDestination,
+        AnyDestinationRef,
+    },
+    error_message::ErrorMessage,
+};
 
 #[derive(Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +34,8 @@ pub struct Config {
     clusters: BTreeMap<String, LocalCluster>,
     #[serde(default)]
     default_profile: Option<String>,
+    #[serde(default)]
+    default_destination: AnyDestinationRef,
 
     #[serde(skip)]
     cluster_cache: RwLock<BTreeMap<String, Arc<Cluster>>>,
@@ -94,6 +102,14 @@ impl Config {
             }
         }
         self.default_profile.clone()
+    }
+
+    pub async fn get_default_destination(&self) -> Result<AnyDestination, Box<dyn Error>> {
+        let destination = self.default_destination.get_destination(self).await?;
+        if destination.is_void() {
+            eprintln!("Warning: Using void destination");
+        }
+        Ok(destination)
     }
 }
 

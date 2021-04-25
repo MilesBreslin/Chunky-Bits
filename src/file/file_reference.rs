@@ -2,7 +2,6 @@ use std::{
     fmt,
     ops::Deref,
     pin::Pin,
-    sync::Arc,
 };
 
 use futures::stream::{
@@ -78,9 +77,9 @@ impl FileReference {
         )
     }
 
-    pub async fn resilver_owned<D>(self, destination: Arc<D>) -> ResilverFileReportOwned
+    pub async fn resilver_owned<D>(self, destination: D) -> ResilverFileReportOwned
     where
-        D: CollectionDestination + Send + Sync + 'static,
+        D: CollectionDestination + Clone + Send + Sync + 'static,
     {
         let mut file = Box::pin(self);
         let mut file_ref: Pin<&mut FileReference> = file.as_mut();
@@ -89,9 +88,9 @@ impl FileReference {
         ResilverFileReportOwned { file, report }
     }
 
-    pub async fn resilver<D>(&mut self, destination: Arc<D>) -> ResilverFileReport<'_>
+    pub async fn resilver<D>(&mut self, destination: D) -> ResilverFileReport<'_>
     where
-        D: CollectionDestination + Send + Sync + 'static,
+        D: CollectionDestination + Clone + Send + Sync + 'static,
     {
         let part_reports = stream::iter(
             self.parts
@@ -216,6 +215,7 @@ macro_rules! report_common {
 
                 impl fmt::Display for DisplayFullReport<'_> {
                     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                        writeln!(f, "file\t{}\n", self.0.integrity())?;
                         for part_report in self.0.part_reports() {
                             writeln!(f, "{}", part_report.display_full_report())?;
                         }

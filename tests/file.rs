@@ -69,7 +69,7 @@ async fn not_enough_writers() -> Result<(), Box<dyn Error>> {
             let chunk_size = 1 << 20;
             let mut reader = repeat(0).take(length);
             let result = FileReference::write_builder()
-                .destination_arc(locations.clone())
+                .destination(Arc::new(locations.clone()))
                 .chunk_size(chunk_size)
                 .data_chunks(data)
                 .parity_chunks(parity)

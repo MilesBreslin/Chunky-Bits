@@ -2,10 +2,7 @@ mod cluster;
 pub use cluster::*;
 
 mod destination;
-use destination::{
-    DestinationContainer,
-    DestinationInner,
-};
+pub use destination::*;
 
 mod metadata;
 pub use metadata::*;

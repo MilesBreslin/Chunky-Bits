@@ -132,14 +132,14 @@ impl FilePart {
 
     pub(crate) async fn write_with_encoder<D>(
         encoder: impl AsRef<ReedSolomon<galois_8::Field>> + Send + Sync,
-        destination: impl AsRef<D>,
+        destination: D,
         data_buf: impl AsRef<[u8]>,
         length: usize,
         data: usize,
         parity: usize,
     ) -> Result<FilePart, FileWriteError>
     where
-        D: CollectionDestination + Send + Sync + 'static,
+        D: CollectionDestination + Clone + Send + Sync + 'static,
     {
         // Move data_buf into scope and make it immutable
         let data_buf = data_buf.as_ref();
@@ -159,7 +159,7 @@ impl FilePart {
             .encode_sep::<&[u8], Vec<u8>>(&data_chunks, &mut parity_chunks)?;
 
         // Get some writers
-        let mut writers = destination.as_ref().get_writers(data + parity)?;
+        let mut writers = destination.get_writers(data + parity)?;
 
         let (mut error_tx, error_rx): (Vec<_>, FuturesUnordered<_>) = (0..(data + parity))
             .map(|_| oneshot::channel::<FileWriteError>())
@@ -244,9 +244,9 @@ impl FilePart {
         }
     }
 
-    pub async fn resilver<D>(&mut self, destination: Arc<D>) -> ResilverPartReport<'_>
+    pub async fn resilver<D>(&mut self, destination: D) -> ResilverPartReport<'_>
     where
-        D: CollectionDestination + Send + Sync + 'static,
+        D: CollectionDestination + Clone + Send + Sync + 'static,
     {
         let FilePart {
             ref mut data,
@@ -310,7 +310,7 @@ impl FilePart {
                         })
                 })
                 .collect::<Vec<Option<&Location>>>();
-            match destination.as_ref().get_used_writers(&chunks_request) {
+            match destination.get_used_writers(&chunks_request) {
                 Ok(mut writers) => {
                     let iter_mut = data
                         .iter_mut()
@@ -732,16 +732,18 @@ impl<'a> ResilverPartReport<'a> {
                 return integrity;
             }
         }
-        let mut successful_writes =
-            self.write_results
-                .iter()
-                .filter_map(|(write_chunk, result)| {
-                    let write_chunk: &Chunk = write_chunk;
-                    ptr::eq(chunk, write_chunk)
-                        .then(|| result.as_ref().ok())
-                        .flatten()
-                });
+        let mut successful_writes = self
+            .write_results
+            .iter()
+            .filter_map(|(write_chunk, result)| {
+                let write_chunk: &Chunk = write_chunk;
+                ptr::eq(chunk, write_chunk)
+                    .then(|| result.as_ref().ok())
+                    .flatten()
+            })
+            .flat_map(IntoIterator::into_iter);
         if successful_writes.next().is_some() {
+            println!("HAs successful_writes");
             return LocationIntegrity::Valid;
         };
         chunk_integrity

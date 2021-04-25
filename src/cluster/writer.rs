@@ -31,7 +31,6 @@ use crate::{
     cluster::{
         ClusterNode,
         ClusterNodes,
-        DestinationContainer,
         DestinationInner,
         ZoneRule,
         ZoneRules,
@@ -45,7 +44,7 @@ use crate::{
 };
 
 pub(super) struct ClusterWriterState {
-    pub parent: DestinationContainer,
+    pub parent: Arc<DestinationInner>,
     pub inner_state: Mutex<ClusterWriterInnerState>,
 }
 pub(super) struct ClusterWriterInnerState {
