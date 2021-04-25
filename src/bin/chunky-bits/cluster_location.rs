@@ -79,24 +79,34 @@ impl ClusterLocation {
     pub async fn get_reader(
         &self,
         config: &Config,
-    ) -> Result<impl AsyncRead + Unpin + '_, Box<dyn Error>> {
+    ) -> Result<impl AsyncRead + Send + Unpin + '_, ErrorMessage> {
         use ClusterLocation::*;
-        let result: Result<Pin<Box<dyn AsyncRead + Unpin>>, Box<dyn Error>>;
+        let result: Result<Pin<Box<dyn AsyncRead + Send + Unpin>>, ErrorMessage>;
         match self {
             ClusterFile { cluster, path } => {
-                let cluster = config.get_cluster(&cluster).await?;
-                let file_ref = cluster.get_file_ref(&path).await?;
+                let cluster = config
+                    .get_cluster(&cluster)
+                    .await
+                    .map_err(ErrorMessage::new)?;
+                let file_ref = cluster
+                    .get_file_ref(&path)
+                    .await
+                    .map_err(ErrorMessage::new)?;
                 let reader = file_ref.read_builder_owned().reader_owned();
                 result = Ok(Box::pin(reader));
             },
             FileRef(loc) => {
-                let bytes = loc.read().await?;
-                let file_ref: FileReference = serde_yaml::from_slice(&bytes)?;
+                let bytes = loc.read().await.map_err(ErrorMessage::new)?;
+                let file_ref: FileReference =
+                    serde_yaml::from_slice(&bytes).map_err(ErrorMessage::new)?;
                 let reader = file_ref.read_builder_owned().reader_owned();
                 result = Ok(Box::pin(reader));
             },
             Other(loc) => {
-                let reader = loc.reader_with_context(&Default::default()).await?;
+                let reader = loc
+                    .reader_with_context(&Default::default())
+                    .await
+                    .map_err(ErrorMessage::new)?;
                 result = Ok(Box::pin(reader));
             },
             Stdio => {
@@ -166,8 +176,9 @@ impl ClusterLocation {
                     stream::once(future::ready(Ok(FileOrDirectory::File("-".into())))).boxed();
                 return Ok(stream);
             },
-            FileRef(Location::Local(path)) | Other(Location::Local(path)) =>
-                Ok(FileOrDirectory::list(&path).await?.boxed()),
+            FileRef(Location::Local(path)) | Other(Location::Local(path)) => {
+                Ok(FileOrDirectory::list(&path).await?.boxed())
+            },
             FileRef(Location::Http(http)) | Other(Location::Http(http)) => {
                 let url: &Url = http.as_ref();
                 let components = url
@@ -292,10 +303,8 @@ impl ClusterLocation {
                     },
                 };
                 match self {
-                    ClusterLocation::Other(_)
-                        => ClusterLocation::Other(loc),
-                    ClusterLocation::FileRef(_)
-                        => ClusterLocation::FileRef(loc),
+                    ClusterLocation::Other(_) => ClusterLocation::Other(loc),
+                    ClusterLocation::FileRef(_) => ClusterLocation::FileRef(loc),
                     _ => panic!("Only Other and FileRef should be matched"),
                 }
             },
@@ -421,9 +430,27 @@ impl ClusterLocation {
                         });
                 Ok(stream::iter(iter).boxed())
             },
-            _ => Err(ErrorMessage::from(
-                "Get hashes is only supported on files metadata/clusters",
-            )),
+            Other(_) | Stdio => {
+                let mut reader = self
+                    .get_reader(config)
+                    .await
+                    .map_err(ErrorMessage::with_prefix(self))?;
+                let file_ref = FileReference::write_builder()
+                    .destination(())
+                    .write(&mut reader)
+                    .await
+                    .map_err(ErrorMessage::with_prefix(self))?;
+                let iter =
+                    file_ref
+                        .parts
+                        .into_iter()
+                        .flat_map(|FilePart { data, parity, .. }| {
+                            data.into_iter()
+                                .chain(parity.into_iter())
+                                .map(|Chunk { hash, .. }| Ok(hash))
+                        });
+                Ok(stream::iter(iter).boxed())
+            },
         }
     }
 

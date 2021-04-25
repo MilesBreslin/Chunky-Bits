@@ -43,9 +43,9 @@ impl<T> FileReadBuilder<T> {
 
     fn inner_stream_reader<'a>(
         &self,
-        parts: impl Iterator<Item = impl Borrow<FilePart>> + 'a,
+        parts: impl Iterator<Item = impl Borrow<FilePart> + Send + Sync> + Send + 'a,
         length: u64,
-    ) -> impl Stream<Item = Result<Vec<u8>, FileReadError>> + 'a {
+    ) -> impl Stream<Item = Result<Vec<u8>, FileReadError>> + Send + 'a {
         let FileReadBuilder {
             buffer,
             location_context,
@@ -71,8 +71,8 @@ impl<T> FileReadBuilder<T> {
     }
 
     fn inner_reader<'a>(
-        stream: impl Stream<Item = Result<Vec<u8>, FileReadError>> + 'a,
-    ) -> impl AsyncRead + 'a {
+        stream: impl Stream<Item = Result<Vec<u8>, FileReadError>> + Send + 'a,
+    ) -> impl AsyncRead + Send + 'a {
         StreamReader::new(stream.map(|res| -> io::Result<_> {
             match res {
                 Ok(bytes) => Ok(std::io::Cursor::new(bytes)),
@@ -84,25 +84,25 @@ impl<T> FileReadBuilder<T> {
 
 impl<T> FileReadBuilder<T>
 where
-    T: Borrow<FileReference>,
+    T: Borrow<FileReference> + Send + Sync,
 {
-    pub fn stream_reader(&self) -> impl Stream<Item = Result<Vec<u8>, FileReadError>> + '_ {
+    pub fn stream_reader(&self) -> impl Stream<Item = Result<Vec<u8>, FileReadError>> + Send + '_ {
         let FileReference { parts, length, .. } = self.file.borrow();
         self.inner_stream_reader(parts.iter(), length.unwrap())
     }
 
-    pub fn reader(&self) -> impl AsyncRead + Unpin + '_ {
+    pub fn reader(&self) -> impl AsyncRead + Send + Unpin + '_ {
         Self::inner_reader(self.stream_reader())
     }
 }
 
 impl<T> FileReadBuilder<T>
 where
-    T: Into<FileReference> + 'static,
+    T: Into<FileReference> + Send + 'static,
 {
     pub fn stream_reader_owned(
         self,
-    ) -> impl Stream<Item = Result<Vec<u8>, FileReadError>> + 'static {
+    ) -> impl Stream<Item = Result<Vec<u8>, FileReadError>> + Send + 'static {
         let FileReadBuilder {
             buffer,
             location_context,
@@ -119,7 +119,7 @@ where
         new.inner_stream_reader(parts, length)
     }
 
-    pub fn reader_owned(self) -> impl AsyncRead + Unpin + 'static {
+    pub fn reader_owned(self) -> impl AsyncRead + Send + Unpin + 'static {
         FileReadBuilder::<()>::inner_reader(self.stream_reader_owned())
     }
 }

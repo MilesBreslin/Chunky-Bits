@@ -137,13 +137,12 @@ impl MetadataPath {
     ) -> io::Result<impl Stream<Item = io::Result<FileOrDirectory>> + 'static> {
         let self_owned = self.clone();
         let path = self.sub_path(path);
-        let stream = FileOrDirectory::list(&path).await?
-            .map(move |result| {
-                result.map(|mut f_or_d| {
-                    self_owned.to_pub_path(&mut f_or_d);
-                    f_or_d
-                })
-            });
+        let stream = FileOrDirectory::list(&path).await?.map(move |result| {
+            result.map(|mut f_or_d| {
+                self_owned.to_pub_path(&mut f_or_d);
+                f_or_d
+            })
+        });
         Ok(stream)
     }
 

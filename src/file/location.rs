@@ -119,10 +119,10 @@ impl Location {
     pub async fn reader_with_context(
         &self,
         cx: &LocationContext,
-    ) -> Result<(impl AsyncRead + Unpin), LocationError> {
+    ) -> Result<(impl AsyncRead + Send + Unpin), LocationError> {
         // TODO: Profiler
         use Location::*;
-        let result: Result<Pin<Box<dyn AsyncRead + Unpin>>, _> = match self {
+        let result: Result<Pin<Box<dyn AsyncRead + Send + Unpin>>, _> = match self {
             Local(path) => Ok(Box::pin(File::open(&path).await?)),
             Http(url) => {
                 let url: Url = url.clone().into();
