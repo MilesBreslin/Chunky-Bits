@@ -162,7 +162,8 @@ impl ClusterLocation {
         config: &'a Config,
     ) -> BoxFuture<'a, Result<FilesStreamer<'a>, Box<dyn Error>>> {
         async move {
-            let stream = self_outer.borrow().list_files(config).await?;
+            let mut stream = self_outer.borrow().list_files(config).await?;
+            let top_level = stream.next().await;
             let stream = stream
                 .map(move |res| (res, self_outer.clone()))
                 .then(move |(result, self_inner)| async move {
@@ -187,7 +188,9 @@ impl ClusterLocation {
                     }
                 })
                 .flatten();
-            Ok(stream.boxed())
+            let top_level_stream =
+                stream::once(future::ready(top_level)).filter_map(future::ready);
+            Ok(top_level_stream.chain(stream).boxed())
         }
         .boxed()
     }
