@@ -3,6 +3,7 @@ use std::{
         BTreeSet,
         HashSet,
     },
+    error::Error,
     net::SocketAddr,
     path::PathBuf,
 };
@@ -100,7 +101,7 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<(), Box<dyn Error>> {
     let Opt { command, config } = Opt::from_args();
     let config = Config::builder().path(config);
     match command {
@@ -138,32 +139,34 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             target,
         } => {
             let config = config.load_or_default().await?;
-            let mut hash_stream = target.get_hashes(&config).await?;
+            let hash_stream = target.get_hashes_rec(config).await?;
+            let hash_stream = hash_stream.filter_map(|res| async move {
+                match res {
+                    Ok(hash) => Some(hash),
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        None
+                    },
+                }
+            });
+            tokio::pin!(hash_stream);
+
             match (deduplicate, sort) {
                 (_, true) => {
-                    let mut hashes = BTreeSet::new();
-                    while let Some(hash) = hash_stream.next().await {
-                        hashes.insert(hash?);
-                    }
+                    let hashes = hash_stream.collect::<BTreeSet<_>>().await;
                     for hash in hashes {
                         println!("{}", hash);
                     }
                 },
                 (true, false) => {
-                    let mut hashes = HashSet::new();
-                    while let Some(hash) = hash_stream.next().await {
-                        hashes.insert(hash?);
-                    }
+                    let hashes = hash_stream.collect::<HashSet<_>>().await;
                     for hash in hashes {
                         println!("{}", hash);
                     }
                 },
                 (false, false) => {
-                    while let Some(result) = hash_stream.next().await {
-                        match result {
-                            Ok(hash) => println!("{}", hash),
-                            Err(err) => eprintln!("Error: {}", err),
-                        }
+                    while let Some(hash) = hash_stream.next().await {
+                        println!("{}", hash);
                     }
                 },
             }

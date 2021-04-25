@@ -9,9 +9,13 @@ use std::{
     sync::Arc,
 };
 
-use futures::stream::{
-    Stream,
-    StreamExt,
+use futures::{
+    future,
+    stream::{
+        self,
+        Stream,
+        StreamExt,
+    },
 };
 use serde::{
     de::DeserializeOwned,
@@ -133,44 +137,63 @@ impl MetadataPath {
         path: &Path,
     ) -> io::Result<impl Stream<Item = io::Result<FileOrDirectory>> + 'static> {
         let path = self.sub_path(path);
-        let self_arc = Arc::new(self.clone());
-        let dir_reader = fs::read_dir(&path).await?;
-        let s = ReadDirStream::new(dir_reader)
-            .map(move |entry_res| (entry_res, self_arc.clone()))
-            .filter_map(|(entry_res, self_arc)| async move {
-                let entry = match entry_res {
-                    Ok(e) => e,
-                    Err(err) => return Some(Err(err)),
-                };
-                match FileOrDirectory::from_local_path(entry.path().clone()).await {
-                    Ok(mut file_or_dir) => {
-                        // Remove parent path prefix
-                        let sub_path: &PathBuf = file_or_dir.as_ref();
-                        let mut parent_components = self_arc.path.components();
-                        let mut sub_components = sub_path.components().peekable();
-                        loop {
-                            match (parent_components.next(), sub_components.peek()) {
-                                (Some(x), Some(y)) if x == *y => {
-                                    sub_components.next();
-                                },
-                                (Some(_), None) => {
-                                    panic!("Parent path length exceeds child length");
-                                },
-                                _ => {
-                                    break;
-                                },
-                            }
-                        }
-                        let new_sub_path: PathBuf = sub_components.collect();
-                        let sub_path: &mut PathBuf = file_or_dir.as_mut();
-                        *sub_path = new_sub_path;
-                        Some(Ok::<_, io::Error>(file_or_dir))
-                    },
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-                    Err(err) => Some(Err(err)),
-                }
-            });
-        Ok(s)
+        let mut top_level = FileOrDirectory::from_local_path(path.clone()).await?;
+        self.to_pub_path(&mut top_level);
+        let children = if let FileOrDirectory::Directory(_) = &top_level {
+            let self_arc = Arc::new(self.clone());
+            let dir_reader = fs::read_dir(&path).await?;
+            ReadDirStream::new(dir_reader)
+                .map(move |entry_res| (entry_res, self_arc.clone()))
+                .filter_map(|(entry_res, self_arc)| async move {
+                    let entry = match entry_res {
+                        Ok(e) => e,
+                        Err(err) => return Some(Err(err)),
+                    };
+                    match FileOrDirectory::from_local_path(entry.path().clone()).await {
+                        Ok(mut file_or_dir) => {
+                            // Remove parent path prefix
+                            self_arc.to_pub_path(&mut file_or_dir);
+                            Some(Ok::<_, io::Error>(file_or_dir))
+                        },
+                        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+                        Err(err) => Some(Err(err)),
+                    }
+                })
+                .boxed()
+        } else {
+            stream::empty().boxed()
+        };
+        Ok(stream::once(future::ready(Ok(top_level))).chain(children))
+    }
+
+    fn to_pub_path(&self, f: &mut FileOrDirectory) {
+        let sub_path: &PathBuf = f.as_ref();
+        let new_sub_path: PathBuf = self.pub_path(sub_path);
+        let sub_path: &mut PathBuf = f.as_mut();
+        *sub_path = new_sub_path;
+    }
+
+    fn pub_path(&self, sub_path: &Path) -> PathBuf {
+        let mut parent_components = self.path.components();
+        let mut sub_components = sub_path.components().peekable();
+        loop {
+            match (parent_components.next(), sub_components.peek()) {
+                (Some(x), Some(y)) if x == *y => {
+                    sub_components.next();
+                },
+                (Some(_), None) => {
+                    panic!("Parent path length exceeds child length");
+                },
+                _ => {
+                    break;
+                },
+            }
+        }
+        if sub_components.peek().is_none() {
+            PathBuf::from(".")
+        } else {
+            sub_components.collect()
+        }
     }
 
     fn sub_path(&self, path: impl AsRef<Path>) -> PathBuf {

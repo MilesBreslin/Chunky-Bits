@@ -10,6 +10,10 @@ use std::{
 #[derive(Debug)]
 pub struct ErrorMessage(String);
 impl ErrorMessage {
+    pub fn new(err: impl Display) -> Self {
+        ErrorMessage(err.to_string())
+    }
+
     pub fn with_prefix<T, U>(prefix: U) -> impl Fn(T) -> ErrorMessage
     where
         T: Display,

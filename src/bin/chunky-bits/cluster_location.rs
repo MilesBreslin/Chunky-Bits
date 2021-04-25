@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     convert::TryFrom,
     error::Error,
     fmt,
@@ -25,14 +26,15 @@ use chunky_bits::{
     },
 };
 use futures::{
-    future,
     future::{
+        self,
         BoxFuture,
         FutureExt,
     },
     stream::{
         self,
         BoxStream,
+        Stream,
         StreamExt,
     },
 };
@@ -43,7 +45,9 @@ use serde::{
 use tokio::{
     io,
     io::AsyncRead,
+    sync::mpsc,
 };
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     config::Config,
@@ -147,28 +151,29 @@ impl ClusterLocation {
     }
 
     pub async fn list_files_recursive<'a>(
-        &self,
+        &'a self,
         config: &'a Config,
     ) -> Result<FilesStreamer<'a>, Box<dyn Error>> {
-        self.clone().list_files_recursive_inner(config).await
+        Self::list_files_recursive_inner(self, config).await
     }
 
     fn list_files_recursive_inner<'a>(
-        self,
+        self_outer: (impl Borrow<Self> + Clone + Send + Sync + 'a),
         config: &'a Config,
     ) -> BoxFuture<'a, Result<FilesStreamer<'a>, Box<dyn Error>>> {
         async move {
-            let stream = self.list_files(config).await?;
-            let self_arc = Arc::new(self);
+            let stream = self_outer.borrow().list_files(config).await?;
             let stream = stream
-                .map(move |res| (res, self_arc.clone()))
-                .then(move |(result, self_arc)| async move {
+                .map(move |res| (res, self_outer.clone()))
+                .then(move |(result, self_inner)| async move {
                     match &result {
                         Ok(FileOrDirectory::Directory(path)) => {
-                            let sub_self = self_arc.make_sub_location(path.to_owned());
+                            let sub_self = self_inner.borrow().make_sub_location(path.to_owned());
                             let current_result = stream::once(future::ready(result));
                             let sub_results =
-                                match sub_self.list_files_recursive_inner(config).await {
+                                match Self::list_files_recursive_inner(Arc::new(sub_self), config)
+                                    .await
+                                {
                                     Ok(s) => s,
                                     Err(err) => {
                                         let err = ErrorMessage::from(&err.to_string());
@@ -190,18 +195,32 @@ impl ClusterLocation {
     fn make_sub_location(&self, new_path: PathBuf) -> Self {
         use ClusterLocation::*;
         match self {
-            ClusterFile { cluster, path } => {
-                let new_path_parent = new_path.parent().unwrap();
-                assert_eq!(new_path_parent, path);
-                ClusterFile {
-                    cluster: cluster.clone(),
-                    path: new_path,
-                }
+            ClusterFile { cluster, .. } => ClusterFile {
+                cluster: cluster.clone(),
+                path: new_path,
             },
             _ => {
                 todo!();
             },
         }
+    }
+
+    pub async fn list_cluster_locations<'a>(
+        &'a self,
+        config: &'a Config,
+    ) -> Result<impl Stream<Item = io::Result<Self>> + 'a, Box<dyn Error>> {
+        let stream = self
+            .list_files_recursive(config)
+            .await?
+            .filter_map(move |res| {
+                let res = match res {
+                    Ok(FileOrDirectory::File(path)) => Some(Ok(self.make_sub_location(path))),
+                    Ok(FileOrDirectory::Directory(_)) => None,
+                    Err(err) => Some(Err(err)),
+                };
+                future::ready(res)
+            });
+        Ok(stream)
     }
 
     pub async fn resilver(
@@ -263,15 +282,21 @@ impl ClusterLocation {
     pub async fn get_hashes(
         &self,
         config: &Config,
-    ) -> Result<BoxStream<'_, Result<AnyHash, Box<dyn Error>>>, Box<dyn Error>> {
+    ) -> Result<BoxStream<'_, Result<AnyHash, Box<dyn Error + Send + Sync>>>, ErrorMessage> {
         use ClusterLocation::*;
         match self {
             ClusterFile {
                 cluster: cluster_name,
                 path,
             } => {
-                let cluster = config.get_cluster(&cluster_name).await?;
-                let file_ref = cluster.get_file_ref(&path).await?;
+                let cluster = config
+                    .get_cluster(&cluster_name)
+                    .await
+                    .map_err(ErrorMessage::with_prefix(self))?;
+                let file_ref = cluster
+                    .get_file_ref(&path)
+                    .await
+                    .map_err(ErrorMessage::with_prefix(self))?;
                 let iter =
                     file_ref
                         .parts
@@ -284,8 +309,9 @@ impl ClusterLocation {
                 Ok(stream::iter(iter).boxed())
             },
             FileRef(loc) => {
-                let bytes = loc.read().await?;
-                let file_ref: FileReference = serde_yaml::from_slice(&bytes)?;
+                let bytes = loc.read().await.map_err(ErrorMessage::with_prefix(self))?;
+                let file_ref: FileReference =
+                    serde_yaml::from_slice(&bytes).map_err(ErrorMessage::with_prefix(self))?;
                 let iter =
                     file_ref
                         .parts
@@ -297,8 +323,49 @@ impl ClusterLocation {
                         });
                 Ok(stream::iter(iter).boxed())
             },
-            _ => Err(ErrorMessage::from("Get hashes is only supported on files").into()),
+            _ => Err(ErrorMessage::from(
+                "Get hashes is only supported on files metadata/clusters",
+            )),
         }
+    }
+
+    pub async fn get_hashes_rec(
+        &self,
+        config: impl Into<Arc<Config>>,
+    ) -> Result<impl Stream<Item = Result<AnyHash, ErrorMessage>>, ErrorMessage> {
+        let config = config.into();
+        let target = self.clone();
+        let (hashes_tx, hashes_rx) = mpsc::channel(50);
+        let mut locations = target
+            .list_cluster_locations(&config)
+            .await
+            .map_err(ErrorMessage::with_prefix(self))?;
+        while let Some(result) = locations.next().await {
+            let hashes_tx = hashes_tx.clone();
+            let config = config.clone();
+            let loc = result.map_err(ErrorMessage::new)?;
+            tokio::spawn(async move {
+                let mut hashes = match loc.get_hashes(&config).await {
+                    Ok(h) => h,
+                    Err(err) => {
+                        let _ = hashes_tx.send(Err(ErrorMessage::new(err))).await;
+                        return;
+                    },
+                };
+                while let Some(result) = hashes.next().await {
+                    match result {
+                        Ok(hash) => {
+                            let _ = hashes_tx.send(Ok(hash)).await;
+                        },
+                        Err(err) => {
+                            let _ = hashes_tx.send(Err(ErrorMessage::new(err))).await;
+                        },
+                    }
+                }
+            });
+        }
+
+        Ok(ReceiverStream::new(hashes_rx))
     }
 }
 
