@@ -1,9 +1,15 @@
 use std::{
     borrow::Borrow,
-    convert::TryFrom,
+    convert::{
+        TryFrom,
+        TryInto,
+    },
     error::Error,
+    ffi::OsStr,
     fmt,
+    iter,
     path::{
+        Component,
         Path,
         PathBuf,
     },
@@ -43,11 +49,14 @@ use serde::{
     Serialize,
 };
 use tokio::{
-    io,
-    io::AsyncRead,
+    io::{
+        self,
+        AsyncRead,
+    },
     sync::mpsc,
 };
 use tokio_stream::wrappers::ReceiverStream;
+use url::Url;
 
 use crate::{
     config::Config,
@@ -63,6 +72,7 @@ pub enum ClusterLocation {
     ClusterFile { cluster: String, path: PathBuf },
     FileRef(Location),
     Other(Location),
+    Stdio,
 }
 
 impl ClusterLocation {
@@ -88,6 +98,9 @@ impl ClusterLocation {
             Other(loc) => {
                 let reader = loc.reader_with_context(&Default::default()).await?;
                 result = Ok(Box::pin(reader));
+            },
+            Stdio => {
+                result = Ok(Box::pin(io::stdin()));
             },
         };
         result
@@ -128,6 +141,10 @@ impl ClusterLocation {
             Other(loc) => Ok(loc
                 .write_from_reader_with_context(&Default::default(), reader)
                 .await?),
+            Stdio => {
+                let mut writer = io::stdout();
+                Ok(io::copy(reader, &mut writer).await?)
+            },
         }
     }
 
@@ -144,8 +161,23 @@ impl ClusterLocation {
                 let cluster = config.get_cluster(&cluster_name).await?;
                 return Ok(cluster.list_files(path).await?.boxed());
             },
-            _ => {
-                todo!();
+            Stdio => {
+                let stream: FilesStreamer<'static> =
+                    stream::once(future::ready(Ok(FileOrDirectory::File("-".into())))).boxed();
+                return Ok(stream);
+            },
+            FileRef(Location::Local(path)) | Other(Location::Local(path)) =>
+                Ok(FileOrDirectory::list(&path).await?.boxed()),
+            FileRef(Location::Http(http)) | Other(Location::Http(http)) => {
+                let url: &Url = http.as_ref();
+                let components = url
+                    .path_segments()
+                    .unwrap()
+                    .map(|s| Component::Normal(s.as_ref()));
+                let path = iter::once(Component::RootDir).chain(components).collect();
+                let stream: FilesStreamer<'static> =
+                    stream::once(future::ready(Ok(FileOrDirectory::File(path)))).boxed();
+                return Ok(stream);
             },
         }
     }
@@ -170,7 +202,6 @@ impl ClusterLocation {
                     match &result {
                         Ok(FileOrDirectory::Directory(path)) => {
                             let sub_self = self_inner.borrow().make_sub_location(path.to_owned());
-                            let current_result = stream::once(future::ready(result));
                             let sub_results =
                                 match Self::list_files_recursive_inner(Arc::new(sub_self), config)
                                     .await
@@ -182,29 +213,93 @@ impl ClusterLocation {
                                         stream::once(future::ready(Err(result))).boxed()
                                     },
                                 };
-                            current_result.chain(sub_results).boxed()
+                            sub_results
                         },
                         _ => stream::once(future::ready(result)).boxed(),
                     }
                 })
                 .flatten();
-            let top_level_stream =
-                stream::once(future::ready(top_level)).filter_map(future::ready);
+            let top_level_stream = stream::once(future::ready(top_level)).filter_map(future::ready);
             Ok(top_level_stream.chain(stream).boxed())
         }
         .boxed()
     }
 
     fn make_sub_location(&self, new_path: PathBuf) -> Self {
-        use ClusterLocation::*;
         match self {
-            ClusterFile { cluster, .. } => ClusterFile {
+            ClusterLocation::ClusterFile { cluster, .. } => ClusterLocation::ClusterFile {
                 cluster: cluster.clone(),
                 path: new_path,
             },
-            _ => {
-                todo!();
+            ClusterLocation::Other(loc) | ClusterLocation::FileRef(loc) => {
+                fn trim_components<'a>(
+                    parent_components: &mut dyn Iterator<Item = &str>,
+                    sub_components: &mut iter::Peekable<impl Iterator<Item = &'a str>>,
+                ) {
+                    loop {
+                        let parent_part = parent_components.next();
+                        let sub_part = sub_components.peek();
+                        match (parent_part, sub_part) {
+                            (Some(parent_part), Some(sub_part)) if parent_part == *sub_part => {
+                                sub_components.next();
+                            },
+                            _ => {
+                                break;
+                            },
+                        }
+                    }
+                }
+                let mut sub_components = new_path
+                    .components()
+                    .filter_map(|comp| {
+                        use Component::*;
+                        match comp {
+                            Normal(x) => Some(x),
+                            _ => None,
+                        }
+                    })
+                    .filter_map(OsStr::to_str)
+                    .peekable();
+                let loc = match loc {
+                    Location::Http(http) => {
+                        let mut url: Url = http.clone().into();
+                        let mut parent_components = url.path_segments().unwrap();
+                        trim_components(&mut parent_components, &mut sub_components);
+                        let mut path_seg = url.path_segments_mut().unwrap();
+                        for sub_part in sub_components {
+                            path_seg.push(sub_part);
+                        }
+                        drop(path_seg);
+                        Location::Http(url.try_into().unwrap())
+                    },
+                    Location::Local(path) => {
+                        let mut parent_components = path
+                            .components()
+                            .filter_map(|comp| {
+                                use Component::*;
+                                match comp {
+                                    Normal(x) => Some(x),
+                                    _ => None,
+                                }
+                            })
+                            .filter_map(OsStr::to_str);
+                        trim_components(&mut parent_components, &mut sub_components);
+                        Location::Local(
+                            path.components()
+                                .chain(sub_components.map(|s| Component::Normal(s.as_ref())))
+                                .collect(),
+                        )
+                    },
+                };
+                match self {
+                    ClusterLocation::Other(_)
+                        => ClusterLocation::Other(loc),
+                    ClusterLocation::FileRef(_)
+                        => ClusterLocation::FileRef(loc),
+                    _ => panic!("Only Other and FileRef should be matched"),
+                }
             },
+            ClusterLocation::Stdio => ClusterLocation::Stdio,
         }
     }
 
@@ -376,6 +471,9 @@ impl FromStr for ClusterLocation {
     type Err = Box<dyn Error>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if "-" == s {
+            return Ok(ClusterLocation::Stdio);
+        }
         let mut split = s.split('#');
         match (split.next(), split.next(), split.next()) {
             (Some("@"), Some(path), None) => {
@@ -410,6 +508,7 @@ impl fmt::Display for ClusterLocation {
             ClusterFile { cluster, path } => write!(f, "{}#{}", cluster, path.display()),
             FileRef(location) => write!(f, "@#{}", location),
             Other(location) => write!(f, "{}", location),
+            Stdio => write!(f, "-"),
         }
     }
 }

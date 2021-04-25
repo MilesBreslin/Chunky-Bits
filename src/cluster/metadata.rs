@@ -6,7 +6,6 @@ use std::{
         Path,
         PathBuf,
     },
-    sync::Arc,
 };
 
 use futures::{
@@ -136,34 +135,16 @@ impl MetadataPath {
         &self,
         path: &Path,
     ) -> io::Result<impl Stream<Item = io::Result<FileOrDirectory>> + 'static> {
+        let self_owned = self.clone();
         let path = self.sub_path(path);
-        let mut top_level = FileOrDirectory::from_local_path(path.clone()).await?;
-        self.to_pub_path(&mut top_level);
-        let children = if let FileOrDirectory::Directory(_) = &top_level {
-            let self_arc = Arc::new(self.clone());
-            let dir_reader = fs::read_dir(&path).await?;
-            ReadDirStream::new(dir_reader)
-                .map(move |entry_res| (entry_res, self_arc.clone()))
-                .filter_map(|(entry_res, self_arc)| async move {
-                    let entry = match entry_res {
-                        Ok(e) => e,
-                        Err(err) => return Some(Err(err)),
-                    };
-                    match FileOrDirectory::from_local_path(entry.path().clone()).await {
-                        Ok(mut file_or_dir) => {
-                            // Remove parent path prefix
-                            self_arc.to_pub_path(&mut file_or_dir);
-                            Some(Ok::<_, io::Error>(file_or_dir))
-                        },
-                        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-                        Err(err) => Some(Err(err)),
-                    }
+        let stream = FileOrDirectory::list(&path).await?
+            .map(move |result| {
+                result.map(|mut f_or_d| {
+                    self_owned.to_pub_path(&mut f_or_d);
+                    f_or_d
                 })
-                .boxed()
-        } else {
-            stream::empty().boxed()
-        };
-        Ok(stream::once(future::ready(Ok(top_level))).chain(children))
+            });
+        Ok(stream)
     }
 
     fn to_pub_path(&self, f: &mut FileOrDirectory) {
@@ -286,6 +267,31 @@ impl FileOrDirectory {
                 "Not a file or directory",
             ))
         }
+    }
+
+    pub async fn list(
+        path: &Path,
+    ) -> io::Result<impl Stream<Item = io::Result<FileOrDirectory>> + 'static> {
+        let top_level = FileOrDirectory::from_local_path(path.to_owned()).await?;
+        let children = if let FileOrDirectory::Directory(_) = &top_level {
+            let dir_reader = fs::read_dir(&path).await?;
+            ReadDirStream::new(dir_reader)
+                .filter_map(|entry_res| async move {
+                    let entry = match entry_res {
+                        Ok(e) => e,
+                        Err(err) => return Some(Err(err)),
+                    };
+                    match FileOrDirectory::from_local_path(entry.path().clone()).await {
+                        Ok(file_or_dir) => Some(Ok::<_, io::Error>(file_or_dir)),
+                        Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+                        Err(err) => Some(Err(err)),
+                    }
+                })
+                .boxed()
+        } else {
+            stream::empty().boxed()
+        };
+        Ok(stream::once(future::ready(Ok(top_level))).chain(children))
     }
 }
 

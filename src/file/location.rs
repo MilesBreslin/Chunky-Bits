@@ -423,6 +423,12 @@ impl TryFrom<Url> for Location {
 #[serde(into = "Url")]
 pub struct HttpUrl(Url);
 
+impl AsRef<Url> for HttpUrl {
+    fn as_ref(&self) -> &Url {
+        &self.0
+    }
+}
+
 impl FromStr for HttpUrl {
     type Err = LocationParseError;
 
