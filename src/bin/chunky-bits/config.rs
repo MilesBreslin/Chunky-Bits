@@ -33,9 +33,9 @@ pub struct Config {
     #[serde(default)]
     clusters: BTreeMap<String, LocalCluster>,
     #[serde(default)]
-    default_profile: Option<String>,
-    #[serde(default)]
     default_destination: AnyDestinationRef,
+    #[serde(default)]
+    default_profile: Option<String>,
 
     #[serde(skip)]
     cluster_cache: RwLock<BTreeMap<String, Arc<Cluster>>>,
