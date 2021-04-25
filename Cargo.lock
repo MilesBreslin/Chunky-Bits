@@ -175,6 +175,7 @@ dependencies = [
  "structopt",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "url",
  "warp",

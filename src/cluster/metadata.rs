@@ -6,8 +6,13 @@ use std::{
         Path,
         PathBuf,
     },
+    sync::Arc,
 };
 
+use futures::stream::{
+    Stream,
+    StreamExt,
+};
 use serde::{
     de::DeserializeOwned,
     Deserialize,
@@ -18,6 +23,7 @@ use tokio::{
     io,
     process::Command,
 };
+use tokio_stream::wrappers::ReadDirStream;
 
 use crate::{
     error::{
@@ -61,8 +67,8 @@ impl MetadataTypes {
 
     pub async fn list(
         &self,
-        path: impl AsRef<Path>,
-    ) -> Result<Vec<FileOrDirectory>, MetadataReadError> {
+        path: &Path,
+    ) -> Result<impl Stream<Item = io::Result<FileOrDirectory>> + 'static, MetadataReadError> {
         match self {
             MetadataTypes::Path(meta_path) => {
                 Ok(meta_path.list(path).await.map_err(LocationError::from)?)
@@ -122,42 +128,49 @@ impl MetadataPath {
         Ok(self.format.from_bytes(&bytes)?)
     }
 
-    pub async fn list(&self, path: impl AsRef<Path>) -> io::Result<Vec<FileOrDirectory>> {
+    pub async fn list(
+        &self,
+        path: &Path,
+    ) -> io::Result<impl Stream<Item = io::Result<FileOrDirectory>> + 'static> {
         let path = self.sub_path(path);
-        let mut items: Vec<FileOrDirectory> = Vec::new();
-        let mut dir_reader = fs::read_dir(&path).await?;
-        while let Some(entry) = dir_reader.next_entry().await? {
-            match FileOrDirectory::from_local_path(entry.path().clone()).await {
-                Ok(mut file_or_dir) => {
-                    // Remove parent path prefix
-                    let sub_path: &PathBuf = file_or_dir.as_ref();
-                    let mut parent_components = self.path.components();
-                    let mut sub_components = sub_path.components().peekable();
-                    loop {
-                        match (parent_components.next(), sub_components.peek()) {
-                            (Some(x), Some(y)) if x == *y => {
-                                sub_components.next();
-                            },
-                            (Some(_), None) => {
-                                panic!("Parent path length exceeds child length");
-                            },
-                            _ => {
-                                break;
-                            },
+        let self_arc = Arc::new(self.clone());
+        let dir_reader = fs::read_dir(&path).await?;
+        let s = ReadDirStream::new(dir_reader)
+            .map(move |entry_res| (entry_res, self_arc.clone()))
+            .filter_map(|(entry_res, self_arc)| async move {
+                let entry = match entry_res {
+                    Ok(e) => e,
+                    Err(err) => return Some(Err(err)),
+                };
+                match FileOrDirectory::from_local_path(entry.path().clone()).await {
+                    Ok(mut file_or_dir) => {
+                        // Remove parent path prefix
+                        let sub_path: &PathBuf = file_or_dir.as_ref();
+                        let mut parent_components = self_arc.path.components();
+                        let mut sub_components = sub_path.components().peekable();
+                        loop {
+                            match (parent_components.next(), sub_components.peek()) {
+                                (Some(x), Some(y)) if x == *y => {
+                                    sub_components.next();
+                                },
+                                (Some(_), None) => {
+                                    panic!("Parent path length exceeds child length");
+                                },
+                                _ => {
+                                    break;
+                                },
+                            }
                         }
-                    }
-                    let new_sub_path: PathBuf = sub_components.collect();
-                    let sub_path: &mut PathBuf = file_or_dir.as_mut();
-                    *sub_path = new_sub_path;
-                    items.push(file_or_dir);
-                },
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {},
-                Err(err) => {
-                    return Err(err);
-                },
-            }
-        }
-        Ok(items)
+                        let new_sub_path: PathBuf = sub_components.collect();
+                        let sub_path: &mut PathBuf = file_or_dir.as_mut();
+                        *sub_path = new_sub_path;
+                        Some(Ok::<_, io::Error>(file_or_dir))
+                    },
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+                    Err(err) => Some(Err(err)),
+                }
+            });
+        Ok(s)
     }
 
     fn sub_path(&self, path: impl AsRef<Path>) -> PathBuf {

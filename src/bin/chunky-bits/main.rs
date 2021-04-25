@@ -78,7 +78,11 @@ enum Command {
         listen_addr: SocketAddr,
     },
     /// List the files in a cluster directory
-    Ls { target: ClusterLocation },
+    Ls {
+        #[structopt(short, long)]
+        recursive: bool,
+        target: ClusterLocation,
+    },
     /// Resilver a cluster file
     Resilver { target: ClusterLocation },
     /// Verify a cluster file
@@ -176,11 +180,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })?;
             server.await;
         },
-        Command::Ls { target } => {
+        Command::Ls { target, recursive } => {
             let config = config.load_or_default().await?;
-            let files = target.list_files(&config).await?;
-            for file in files {
-                println!("{}", file);
+            let mut files = if recursive {
+                target.list_files_recursive(&config).await?
+            } else {
+                target.list_files(&config).await?
+            };
+            while let Some(file_res) = files.next().await {
+                match file_res {
+                    Ok(file) => println!("{}", file.as_ref().display()),
+                    Err(err) => eprintln!("Error: {}", err),
+                }
             }
         },
         Command::Resilver { target } => {

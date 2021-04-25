@@ -24,21 +24,33 @@ use chunky_bits::{
         VerifyFileReportOwned,
     },
 };
-use futures::stream::{
-    self,
-    BoxStream,
-    StreamExt,
+use futures::{
+    future,
+    future::{
+        BoxFuture,
+        FutureExt,
+    },
+    stream::{
+        self,
+        BoxStream,
+        StreamExt,
+    },
 };
 use serde::{
     Deserialize,
     Serialize,
 };
-use tokio::io::AsyncRead;
+use tokio::{
+    io,
+    io::AsyncRead,
+};
 
 use crate::{
     config::Config,
     error_message::ErrorMessage,
 };
+
+type FilesStreamer<'a> = BoxStream<'a, io::Result<FileOrDirectory>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String")]
@@ -118,7 +130,7 @@ impl ClusterLocation {
     pub async fn list_files(
         &self,
         config: &Config,
-    ) -> Result<Vec<FileOrDirectory>, Box<dyn Error>> {
+    ) -> Result<FilesStreamer<'static>, Box<dyn Error>> {
         use ClusterLocation::*;
         match self {
             ClusterFile {
@@ -126,7 +138,65 @@ impl ClusterLocation {
                 path,
             } => {
                 let cluster = config.get_cluster(&cluster_name).await?;
-                return Ok(cluster.list_files(path).await?);
+                return Ok(cluster.list_files(path).await?.boxed());
+            },
+            _ => {
+                todo!();
+            },
+        }
+    }
+
+    pub async fn list_files_recursive<'a>(
+        &self,
+        config: &'a Config,
+    ) -> Result<FilesStreamer<'a>, Box<dyn Error>> {
+        self.clone().list_files_recursive_inner(config).await
+    }
+
+    fn list_files_recursive_inner<'a>(
+        self,
+        config: &'a Config,
+    ) -> BoxFuture<'a, Result<FilesStreamer<'a>, Box<dyn Error>>> {
+        async move {
+            let stream = self.list_files(config).await?;
+            let self_arc = Arc::new(self);
+            let stream = stream
+                .map(move |res| (res, self_arc.clone()))
+                .then(move |(result, self_arc)| async move {
+                    match &result {
+                        Ok(FileOrDirectory::Directory(path)) => {
+                            let sub_self = self_arc.make_sub_location(path.to_owned());
+                            let current_result = stream::once(future::ready(result));
+                            let sub_results =
+                                match sub_self.list_files_recursive_inner(config).await {
+                                    Ok(s) => s,
+                                    Err(err) => {
+                                        let err = ErrorMessage::from(&err.to_string());
+                                        let result = io::Error::new(io::ErrorKind::Other, err);
+                                        stream::once(future::ready(Err(result))).boxed()
+                                    },
+                                };
+                            current_result.chain(sub_results).boxed()
+                        },
+                        _ => stream::once(future::ready(result)).boxed(),
+                    }
+                })
+                .flatten();
+            Ok(stream.boxed())
+        }
+        .boxed()
+    }
+
+    fn make_sub_location(&self, new_path: PathBuf) -> Self {
+        use ClusterLocation::*;
+        match self {
+            ClusterFile { cluster, path } => {
+                let new_path_parent = new_path.parent().unwrap();
+                assert_eq!(new_path_parent, path);
+                ClusterFile {
+                    cluster: cluster.clone(),
+                    path: new_path,
+                }
             },
             _ => {
                 todo!();

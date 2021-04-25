@@ -1,28 +1,17 @@
 use std::{
-    collections::HashSet,
     convert::TryInto,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::Path,
 };
 
-use futures::{
-    future::{
-        BoxFuture,
-        FutureExt,
-    },
-    stream::{
-        self,
-        FuturesUnordered,
-        StreamExt,
-    },
-};
+use futures::stream::Stream;
 use serde::{
     Deserialize,
     Serialize,
 };
-use tokio::io::AsyncRead;
+use tokio::{
+    io,
+    io::AsyncRead,
+};
 
 use crate::{
     cluster::{
@@ -42,10 +31,7 @@ use crate::{
         MetadataReadError,
     },
     file::{
-        hash::AnyHash,
         new_profiler,
-        Chunk,
-        FilePart,
         FileReference,
         FileWriteBuilder,
         Location,
@@ -192,79 +178,10 @@ impl Cluster {
         self.profiles.get(profile)
     }
 
-    pub async fn get_all_hashes(&self) -> Result<HashSet<AnyHash>, MetadataReadError> {
-        let files: HashSet<PathBuf> = self
-            .list_files_recursive("/")
-            .await?
-            .into_iter()
-            .filter_map(|file_or_directory| match file_or_directory {
-                FileOrDirectory::File(path) => Some(path),
-                _ => None,
-            })
-            .collect();
-        let mut file_hashes = stream::iter(files.iter().map(|file| self.get_file_ref(file)))
-            .buffered(10)
-            .flat_map(|file_result| {
-                let file_ref = match file_result {
-                    Ok(file_ref) => file_ref,
-                    Err(err) => {
-                        return stream::once(async move { Err(err) }).boxed();
-                    },
-                };
-                let FileReference { parts, .. } = file_ref;
-                stream::iter(parts.into_iter().flat_map(|FilePart { data, parity, .. }| {
-                    data.into_iter()
-                        .chain(parity.into_iter())
-                        .map(|Chunk { hash, .. }| Ok(hash))
-                }))
-                .boxed()
-            });
-        let mut out = HashSet::new();
-        while let Some(hash_result) = file_hashes.next().await {
-            match hash_result {
-                Ok(hash) => {
-                    out.insert(hash);
-                },
-                Err(err) => {
-                    return Err(err);
-                },
-            }
-        }
-        Ok(out)
-    }
-
     pub async fn list_files(
         &self,
-        path: impl AsRef<Path>,
-    ) -> Result<Vec<FileOrDirectory>, MetadataReadError> {
+        path: &Path,
+    ) -> Result<impl Stream<Item = io::Result<FileOrDirectory>> + 'static, MetadataReadError> {
         self.metadata.list(path).await
-    }
-
-    pub async fn list_files_recursive(
-        &self,
-        path: impl AsRef<Path>,
-    ) -> Result<Vec<FileOrDirectory>, MetadataReadError> {
-        self._list_files_recursive_inner(path.as_ref().to_owned())
-            .await
-    }
-
-    fn _list_files_recursive_inner(
-        &self,
-        path: PathBuf,
-    ) -> BoxFuture<'_, Result<Vec<FileOrDirectory>, MetadataReadError>> {
-        async move {
-            let mut items = self.list_files(&path).await?;
-            let mut recursions = FuturesUnordered::<BoxFuture<_>>::new();
-            for item in items.clone() {
-                if let FileOrDirectory::Directory(path) = item {
-                    recursions.push(self._list_files_recursive_inner(path).boxed());
-                }
-            }
-            while let Some(result) = recursions.next().await {
-                items.extend(result?);
-            }
-            Ok(items)
-        }
-        .boxed()
     }
 }
