@@ -16,7 +16,10 @@ use std::{
     pin::Pin,
     str::FromStr,
     string::ToString,
-    sync::Arc,
+    sync::{
+        Arc,
+        Once,
+    },
 };
 
 use chunky_bits::{
@@ -140,8 +143,23 @@ impl ClusterLocation {
             },
             FileRef(loc) => {
                 let destination = config.get_default_destination().await?;
+                let data_chunks = config.get_default_data_chunks().await?;
+                let parity_chunks = config.get_default_parity_chunks().await?;
+                let chunk_size = config.get_default_chunk_size().await?;
+                static WARNING: Once = Once::new();
+                WARNING.call_once(|| {
+                    eprintln!(
+                        "Warning: Writing using default destination data = {}, parity = {}, chunk_size = 2^{}",
+                        data_chunks,
+                        parity_chunks,
+                        chunk_size,
+                    );
+                });
                 let file_ref = FileReference::write_builder()
                     .destination(destination)
+                    .data_chunks(data_chunks)
+                    .parity_chunks(parity_chunks)
+                    .chunk_size(1 << chunk_size)
                     .write(reader)
                     .await?;
                 let file_str = serde_json::to_string_pretty(&file_ref)?;
@@ -431,12 +449,36 @@ impl ClusterLocation {
                 Ok(stream::iter(iter).boxed())
             },
             Other(_) | Stdio => {
+                let data_chunks = config
+                    .get_default_data_chunks()
+                    .await
+                    .map_err(ErrorMessage::new)?;
+                let parity_chunks = config
+                    .get_default_parity_chunks()
+                    .await
+                    .map_err(ErrorMessage::new)?;
+                let chunk_size = config
+                    .get_default_chunk_size()
+                    .await
+                    .map_err(ErrorMessage::new)?;
+                static WARNING: Once = Once::new();
+                WARNING.call_once(|| {
+                    eprintln!(
+                        "Warning: Hashes generated from binary data using data = {}, parity = {}, chunk_size = 2^{}",
+                        data_chunks,
+                        parity_chunks,
+                        chunk_size,
+                    );
+                });
                 let mut reader = self
                     .get_reader(config)
                     .await
                     .map_err(ErrorMessage::with_prefix(self))?;
                 let file_ref = FileReference::write_builder()
                     .destination(())
+                    .data_chunks(data_chunks)
+                    .parity_chunks(parity_chunks)
+                    .chunk_size(1 << chunk_size)
                     .write(&mut reader)
                     .await
                     .map_err(ErrorMessage::with_prefix(self))?;

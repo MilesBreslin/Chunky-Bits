@@ -1,12 +1,23 @@
 use std::{
     collections::BTreeMap,
     error::Error,
-    path::PathBuf,
+    path::{
+        Path,
+        PathBuf,
+    },
     sync::Arc,
 };
 
 use chunky_bits::{
-    cluster::Cluster,
+    cluster::{
+        sized_int::{
+            ChunkSize,
+            DataChunkCount,
+            ParityChunkCount,
+        },
+        Cluster,
+        ClusterProfile,
+    },
     file::Location,
 };
 use serde::{
@@ -111,11 +122,64 @@ impl Config {
         }
         Ok(destination)
     }
+
+    pub async fn get_cluster_profile(
+        &self,
+        target: &str,
+    ) -> Result<ClusterProfile, Box<dyn Error>> {
+        let cluster = self.get_cluster(&target).await?;
+        let profile_name = self.get_profile(&target).await;
+        let profile = cluster.get_profile(profile_name.as_deref());
+        Ok(profile
+            .unwrap_or_else(|| cluster.get_profile(None).unwrap())
+            .clone())
+    }
+
+    pub async fn get_default_chunk_size(&self) -> Result<usize, Box<dyn Error>> {
+        match &self.default_destination {
+            AnyDestinationRef::Cluster {
+                cluster: cluster_name,
+            } => {
+                let profile = self.get_cluster_profile(&cluster_name).await;
+                Ok(profile?.chunk_size.into())
+            },
+            AnyDestinationRef::Locations { chunk_size, .. }
+            | AnyDestinationRef::Void { chunk_size, .. } => Ok((*chunk_size).into()),
+        }
+    }
+
+    pub async fn get_default_data_chunks(&self) -> Result<usize, Box<dyn Error>> {
+        match &self.default_destination {
+            AnyDestinationRef::Cluster {
+                cluster: cluster_name,
+            } => {
+                let profile = self.get_cluster_profile(&cluster_name).await;
+                Ok(profile?.data_chunks.into())
+            },
+            AnyDestinationRef::Locations { data, .. } | AnyDestinationRef::Void { data, .. } => {
+                Ok((*data).into())
+            },
+        }
+    }
+
+    pub async fn get_default_parity_chunks(&self) -> Result<usize, Box<dyn Error>> {
+        match &self.default_destination {
+            AnyDestinationRef::Cluster {
+                cluster: cluster_name,
+            } => {
+                let profile = self.get_cluster_profile(&cluster_name).await;
+                Ok(profile?.parity_chunks.into())
+            },
+            AnyDestinationRef::Locations { parity, .. }
+            | AnyDestinationRef::Void { parity, .. } => Ok((*parity).into()),
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct ConfigBuilder {
     path: Option<PathBuf>,
+    defaults: DefaultOverlay,
 }
 
 impl ConfigBuilder {
@@ -125,8 +189,26 @@ impl ConfigBuilder {
         new
     }
 
-    pub async fn load(self) -> Result<Config, Box<dyn Error>> {
-        let mut reader = match self.path {
+    pub fn default_data_chunks(self, data_chunks: Option<DataChunkCount>) -> Self {
+        let mut new = self;
+        new.defaults.data_chunks = data_chunks;
+        new
+    }
+
+    pub fn default_parity_chunks(self, parity_chunks: Option<ParityChunkCount>) -> Self {
+        let mut new = self;
+        new.defaults.parity_chunks = parity_chunks;
+        new
+    }
+
+    pub fn default_chunk_size(self, chunk_size: Option<ChunkSize>) -> Self {
+        let mut new = self;
+        new.defaults.chunk_size = chunk_size;
+        new
+    }
+
+    async fn load(path: Option<impl AsRef<Path>>) -> Result<Config, Box<dyn Error>> {
+        let mut reader = match path {
             Some(path) => fs::File::open(path).await?,
             None => fs::File::open("/etc/chunky-bits.yaml").await?,
         };
@@ -136,13 +218,62 @@ impl ConfigBuilder {
     }
 
     pub async fn load_or_default(self) -> Result<Config, Box<dyn Error>> {
-        if self.path.is_some() {
-            self.load().await
+        let ConfigBuilder { defaults, path } = self;
+        let config = if path.is_some() {
+            Self::load(path).await
         } else {
-            match self.load().await {
+            match Self::load(path).await {
                 Ok(config) => Ok(config),
                 Err(_) => Ok(Default::default()),
             }
+        };
+        let mut config = match config {
+            Ok(config) => config,
+            Err(err) => {
+                return Err(err);
+            },
+        };
+        defaults.apply_to_config(&mut config);
+        Ok(config)
+    }
+}
+
+#[derive(Default)]
+struct DefaultOverlay {
+    chunk_size: Option<ChunkSize>,
+    data_chunks: Option<DataChunkCount>,
+    parity_chunks: Option<ParityChunkCount>,
+}
+
+impl DefaultOverlay {
+    fn apply_to_config(self, config: &mut Config) {
+        let Config {
+            ref mut default_destination,
+            ..
+        } = config;
+        match default_destination {
+            AnyDestinationRef::Void {
+                ref mut chunk_size,
+                ref mut data,
+                ref mut parity,
+            }
+            | AnyDestinationRef::Locations {
+                ref mut chunk_size,
+                ref mut data,
+                ref mut parity,
+                ..
+            } => {
+                if let Some(c) = &self.chunk_size {
+                    *chunk_size = *c;
+                }
+                if let Some(d) = &self.data_chunks {
+                    *data = *d;
+                }
+                if let Some(p) = &self.parity_chunks {
+                    *parity = *p;
+                }
+            },
+            _ => {},
         }
     }
 }

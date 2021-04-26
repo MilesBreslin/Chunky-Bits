@@ -8,7 +8,14 @@ use std::{
     path::PathBuf,
 };
 
-use chunky_bits::http::cluster_filter;
+use chunky_bits::{
+    cluster::sized_int::{
+        ChunkSize,
+        DataChunkCount,
+        ParityChunkCount,
+    },
+    http::cluster_filter,
+};
 use futures::stream::StreamExt;
 use structopt::StructOpt;
 use tokio::io;
@@ -37,6 +44,15 @@ struct Opt {
     /// Location for the config file
     #[structopt(long)]
     config: Option<PathBuf>,
+    /// Set the default chunk size for non-cluster destinations
+    #[structopt(long)]
+    chunk_size: Option<ChunkSize>,
+    /// Set the default data chunks for non-cluster destinations
+    #[structopt(long)]
+    data_chunks: Option<DataChunkCount>,
+    /// Set the default parity chunks for non-cluster destinations
+    #[structopt(long)]
+    parity_chunks: Option<ParityChunkCount>,
     #[structopt(subcommand)]
     command: Command,
 }
@@ -102,8 +118,18 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn Error>> {
-    let Opt { command, config } = Opt::from_args();
-    let config = Config::builder().path(config);
+    let Opt {
+        command,
+        config,
+        chunk_size,
+        data_chunks,
+        parity_chunks,
+    } = Opt::from_args();
+    let config = Config::builder()
+        .default_data_chunks(data_chunks)
+        .default_parity_chunks(parity_chunks)
+        .default_chunk_size(chunk_size)
+        .path(config);
     match command {
         Command::Cat { targets } => {
             if targets.is_empty() {
