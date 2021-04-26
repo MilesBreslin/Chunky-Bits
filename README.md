@@ -3,24 +3,37 @@
 
 Chunky Bits is simple, unmanaged, distributed HTTP object store tool. It is _not_ S3 compatible. Chunky Bits is built to handle the common user's cluster, where the cluster may grow/shrink at anytime and will consist of cheap, unbalanced hardware.
 
-This is not intended to be a self-contained storage solution. Chunky Bits is a tool that only makes sense in a ecosystem of other common applications and tools. It is up to you to design your own storage solution. See the recommended cluster for more information.
+This is not intended to be a self-contained storage solution. It is up to you to design your own storage solution. See the recommended cluster for more information. You should use tools, such as version control systems, reverse proxies, shared file-systems, WebDav servers, databases, etc. where you see fit.
 
-##### Data Loss Warning
+##### Data Loss and Security Warning
 
-This software is currently in an alpha state. This is an education experiment, not a production tool. I take no responsibility for how you use this tool and any data-loss that may incur from it. You have been warned. See [LICENSE](./LICENSE) file for more details.
+This software is currently in an alpha state. This is an education experiment, not a production tool. This tool should be used in secure network environments only. I take no responsibility for how you use this tool and any data-loss or data-leaks that may incur from it. You have been warned. See [LICENSE](./LICENSE) file for more details.
 
 ### Getting Started
 
-Chunky Bits can be compiled with `cargo` which provides a single executable capable of providing a usable command-line application and a HTTP gateway. To get familiar with the tool, try out the following commands. You will need a `cluster.yaml` and you can find and modify one from the examples directory, such as the [local](./example/local.yaml) cluster file.
+Chunky Bits can be compiled with `cargo` which provides a single executable capable of providing a usable command-line application and a HTTP gateway. It provides commands that are similar to common Linux utilities. To get familiar with the tool, try out the following commands. You will need a `cluster.yaml` and you can find and modify one from the examples directory, such as the [local](./example/local.yaml) cluster file.
 
 ```bash
-chunky-bits put TESTFILE --cluster cluster.yaml
-chunky-bits decode-file --file path/to/metadata/TESTFILE --destination TESTFILE.2
+chunky-bits cp TESTFILE ./cluster.yaml#TESTFILE
+chunky-bits cat ./cluster.yaml#TESTFILE
 ```
 
-The `put` command will write your file into the cluster and create a metadata reference to it. If you are using the `path` metadata type, you will be able to view it as a file.
+The `cp` command will write your file into the cluster and create a metadata reference to it. If you are using the `path` metadata type, you will be able to view it as a file.
 
-The `decode-file` command will read the file from the cluster. However, since the metadata files contain all the metadata required to reference them, you do not need to specify a cluster to decode a metadata file.
+The `cat` command will read the file from the cluster. It uses the same file reference format as `cp`.
+
+### CLI File Reference Formats
+
+The CLI has several different ways to reference a file to make it very flexible and helpful during troubleshooting. Most of these formats are supported for read, write, and list operations. Commands will use these formats where possible, and will error if unsupported.
+
+```bash
+chunky-bits cat ./cluster_file.yaml#path/to/inner/file
+chunky-bits -c ./config.yml cat known_cluster#path/to/inner/file
+chunky-bits cat @#path/to/file/reference.yaml
+chunky-bits cat @#http://remote/path/to/file/reference.yaml
+chunky-bits cat -
+chunky-bits cat ./path/to/local/file
+```
 
 ### Design
 
