@@ -4,7 +4,6 @@ use futures::{
     future::FutureExt,
     stream::{
         FuturesOrdered,
-        FuturesUnordered,
         StreamExt,
     },
 };
@@ -21,8 +20,8 @@ use tokio::{
     sync::{
         mpsc,
         oneshot,
+        Semaphore,
     },
-    task::JoinHandle,
 };
 
 use crate::{
@@ -128,22 +127,11 @@ where
         } = self.state;
         assert!(concurrency > 1);
 
+        let concurrency_limiter = Arc::new(Semaphore::new(concurrency));
         let encoder: Arc<ReedSolomon<galois_8::Field>> = Arc::new(ReedSolomon::new(data, parity)?);
 
         let (error_tx, mut error_rx) = mpsc::channel::<FileWriteError>(1);
         let (part_tx, mut part_rx) = mpsc::channel::<oneshot::Receiver<FilePart>>(1);
-        let (task_tx, mut task_rx) = mpsc::channel::<JoinHandle<()>>(1);
-
-        // Limit concurrent tasks
-        tokio::spawn(async move {
-            let mut pending_tasks = FuturesUnordered::new();
-            while let Some(task) = task_rx.recv().await {
-                pending_tasks.push(task);
-                if pending_tasks.len() >= concurrency - 1 {
-                    let _ = pending_tasks.next().await;
-                }
-            }
-        });
 
         // Collect all parts in order
         let parts = tokio::spawn(async move {
@@ -179,13 +167,7 @@ where
             let mut done = false;
             let mut total_bytes: u64 = 0;
             'file: while !done {
-                // Wait for existing concurrent tasks
-                let task_tx = match task_tx.reserve().await {
-                    Ok(task_tx) => task_tx,
-                    Err(_) => {
-                        return 0;
-                    },
-                };
+                let permit = concurrency_limiter.clone().acquire_owned().await.unwrap();
 
                 let mut data_buf: Vec<u8> = vec![0; data * chunk_size];
                 let mut bytes_read: usize = 0;
@@ -223,7 +205,8 @@ where
                         part_tx.send(rx).await.unwrap();
                         tx
                     };
-                    task_tx.send(tokio::spawn(async move {
+                    tokio::spawn(async move {
+                        let _ = permit;
                         let result = FilePart::write_with_encoder(
                             encoder,
                             destination,
@@ -241,7 +224,7 @@ where
                                 let _ = error_tx.send(err).await;
                             },
                         }
-                    }));
+                    });
                 }
             }
             total_bytes
