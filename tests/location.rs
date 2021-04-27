@@ -94,7 +94,7 @@ mod http_server {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn location_fs_read() -> Result<(), Box<dyn Error>> {
     let location = Location::from_str("/bin/sh")?;
     let bytes = location.read().await?;
@@ -102,7 +102,7 @@ async fn location_fs_read() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn location_fs_write() -> Result<(), Box<dyn Error>> {
     let payload = DEFAULT_PAYLOAD;
     let dir = tempdir()?;
@@ -119,7 +119,7 @@ async fn location_fs_write() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn location_fs_reader_writer() -> Result<(), Box<dyn Error>> {
     let dir = tempdir()?;
     let location = Location::from_str(&format!("{}/hello", dir.path().display()))?;
@@ -139,7 +139,7 @@ async fn location_fs_reader_writer() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn location_http_read() -> Result<(), Box<dyn Error>> {
     let server = http_server::start(64000);
     let location = Location::from_str(&format!("{}", *server))?;
@@ -149,7 +149,7 @@ async fn location_http_read() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn location_http_write() -> Result<(), Box<dyn Error>> {
     let server = http_server::start(64001);
     let location = Location::from_str(&format!("{}hello", *server))?;
@@ -164,7 +164,7 @@ async fn location_http_write() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn location_http_reader_writer() -> Result<(), Box<dyn Error>> {
     let server = http_server::start(64003);
     let location = Location::from_str(&format!("{}hello", *server))?;

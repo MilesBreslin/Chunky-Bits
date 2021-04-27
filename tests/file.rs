@@ -55,7 +55,7 @@ async fn test_file_write() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn not_enough_writers() -> Result<(), Box<dyn Error>> {
     let mut directories: Vec<TempDir> = vec![tempdir()?, tempdir()?, tempdir()?, tempdir()?];
     let locations: Vec<WeightedLocation> = directories
@@ -110,7 +110,7 @@ async fn not_enough_writers() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_read_profiler() -> Result<(), Box<dyn Error>> {
     let directories: Vec<TempDir> = vec![tempdir()?, tempdir()?, tempdir()?, tempdir()?];
     let locations: Vec<WeightedLocation> = directories

@@ -102,13 +102,13 @@ impl TestCluster {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_cluster() -> Result<(), Box<dyn Error>> {
     TestCluster::new().await?;
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_cluster_write() -> Result<(), Box<dyn Error>> {
     let cluster = TestCluster::new().await?;
     let profile = cluster.get_profile(None).unwrap();
@@ -119,7 +119,7 @@ async fn test_cluster_write() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_cluster_not_enough_writers() -> Result<(), Box<dyn Error>> {
     let available_nodes = 2;
     let mut cluster = TestCluster::new().await?;
@@ -142,7 +142,7 @@ async fn test_cluster_not_enough_writers() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_resilver() -> Result<(), Box<dyn Error>> {
     let cluster = TestCluster::new().await?;
     let mut profile = cluster.get_profile(None).unwrap().clone();
@@ -187,7 +187,7 @@ async fn test_resilver() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_resilver_owned() -> Result<(), Box<dyn Error>> {
     let cluster = TestCluster::new().await?;
     let mut profile = cluster.get_profile(None).unwrap().clone();
@@ -230,7 +230,7 @@ async fn test_resilver_owned() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn test_profiler() -> Result<(), Box<dyn Error>> {
     let cluster = TestCluster::new().await?;
     let mut reader = TestCluster::default_reader();
