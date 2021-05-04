@@ -121,9 +121,7 @@ impl FilePart {
             .take(self.data.len())
             .all(Option::is_some)
         {
-            tokio::task::block_in_place(||
-                r.reconstruct(&mut all_read_chunks)
-            )?;
+            tokio::task::block_in_place(|| r.reconstruct_data(&mut all_read_chunks))?;
         }
         let mut output = Vec::<u8>::new();
         for buf in all_read_chunks.drain(..).take(self.data.len()) {
@@ -156,11 +154,11 @@ impl FilePart {
         let mut parity_chunks: Vec<Vec<u8>> = vec![vec![0; buf_length]; parity];
 
         // Calculate parity
-        tokio::task::block_in_place(||
+        tokio::task::block_in_place(|| {
             encoder
                 .as_ref()
                 .encode_sep::<&[u8], Vec<u8>>(&data_chunks, &mut parity_chunks)
-        )?;
+        })?;
 
         // Get some writers
         let mut writers = destination.get_writers(data + parity)?;
@@ -295,14 +293,15 @@ impl FilePart {
         let mut write_results = Vec::new();
         let chunk_status: Vec<bool> = data_bufs.iter().map(|opt| opt.is_some()).collect();
         if data_bufs.iter().any(|opt| opt.is_none()) {
-            write_error =tokio::task::block_in_place(||
-                match ReedSolomon::<galois_8::Field>::new(data.len(), parity.len()) {
-                    Ok(encoder) => tokio::task::block_in_place(||
-                        encoder.reconstruct(&mut data_bufs).map_err(Into::into)
-                    ),
-                    Err(err) => Err(err.into()),
-                }
-            );
+            write_error =
+                tokio::task::block_in_place(|| {
+                    match ReedSolomon::<galois_8::Field>::new(data.len(), parity.len()) {
+                        Ok(encoder) => tokio::task::block_in_place(|| {
+                            encoder.reconstruct(&mut data_bufs).map_err(Into::into)
+                        }),
+                        Err(err) => Err(err.into()),
+                    }
+                });
             let chunks_request = chunk_status
                 .iter()
                 .zip(data.iter().chain(parity.iter()))

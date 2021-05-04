@@ -72,6 +72,17 @@ impl CollectionDestination for Vec<WeightedLocation> {
     }
 }
 
+impl CollectionDestination for Vec<Location> {
+    type Writer = Location;
+
+    fn get_writers(&self, count: usize) -> Result<Vec<Self::Writer>, FileWriteError> {
+        if self.len() < count {
+            return Err(FileWriteError::NotEnoughWriters);
+        }
+        Ok(self.iter().take(count).cloned().collect())
+    }
+}
+
 #[async_trait]
 pub trait ShardWriter {
     async fn write_shard(

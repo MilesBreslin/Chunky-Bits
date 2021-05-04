@@ -16,9 +16,21 @@ use chunky_bits::{
     },
     http::cluster_filter,
 };
-use futures::stream::StreamExt;
+use futures::stream::{
+    FuturesOrdered,
+    FuturesUnordered,
+    StreamExt,
+};
+use reed_solomon_erasure::{
+    galois_8,
+    ReedSolomon,
+};
 use structopt::StructOpt;
-use tokio::io;
+use tokio::io::{
+    self,
+    AsyncReadExt,
+    AsyncWriteExt,
+};
 pub mod any_destination;
 pub mod cluster_location;
 pub mod config;
@@ -76,6 +88,13 @@ enum Command {
         source: ClusterLocation,
         destination: ClusterLocation,
     },
+    DecodeShards {
+        targets: Vec<ClusterLocation>,
+    },
+    EncodeShards {
+        source: ClusterLocation,
+        targets: Vec<ClusterLocation>,
+    },
     /// Get all the known hashes for a location
     GetHashes {
         /// Deduplicate all hashes
@@ -101,9 +120,13 @@ enum Command {
         target: ClusterLocation,
     },
     /// Resilver a cluster file
-    Resilver { target: ClusterLocation },
+    Resilver {
+        target: ClusterLocation,
+    },
     /// Verify a cluster file
-    Verify { target: ClusterLocation },
+    Verify {
+        target: ClusterLocation,
+    },
 }
 
 #[tokio::main]
@@ -158,6 +181,84 @@ async fn run() -> Result<(), Box<dyn Error>> {
             let config = config.load_or_default().await?;
             let mut reader = source.get_reader(&config).await?;
             destination.write_from_reader(&config, &mut reader).await?;
+        },
+        Command::DecodeShards { targets } => {
+            let config = config.load_or_default().await?;
+            let (data_chunks, _parity_chunks, encoder) =
+                get_shard_encoder(data_chunks, parity_chunks, &targets)?;
+
+            let config = &config;
+            let mut shard_data: Vec<Option<Vec<u8>>> = targets
+                .iter()
+                .map(|target| async move {
+                    let mut bytes = Vec::new();
+                    let mut reader = match target.get_reader(&config).await {
+                        Ok(reader) => reader,
+                        Err(err) => {
+                            eprintln!("Error {}: {}", target, err);
+                            return None;
+                        },
+                    };
+                    match reader.read_to_end(&mut bytes).await {
+                        Ok(_) => Some(bytes),
+                        Err(err) => {
+                            eprintln!("Error {}: {}", target, err);
+                            None
+                        },
+                    }
+                })
+                .collect::<FuturesOrdered<_>>()
+                .collect()
+                .await;
+            encoder.reconstruct_data(&mut shard_data)?;
+            let mut writer = io::stdout();
+            for data in shard_data
+                .iter()
+                .take(data_chunks)
+                .filter_map(Option::as_ref)
+            {
+                writer.write_all(&data).await?;
+            }
+        },
+        Command::EncodeShards { source, targets } => {
+            let config = config.load_or_default().await?;
+            let (data_chunks, parity_chunks, encoder) =
+                get_shard_encoder(data_chunks, parity_chunks, &targets)?;
+            let mut data_buf = Vec::new();
+            let mut reader = source.get_reader(&config).await?;
+            reader.read_to_end(&mut data_buf).await?;
+            let buf_length = (data_buf.len() + data_chunks - 1) / data_chunks;
+            data_buf.extend((0..((buf_length * data_chunks) - data_buf.len())).map(|_| 0));
+            let data_chunks: Vec<&[u8]> = (0..data_chunks)
+                .map(|index| -> &[u8] {
+                    &data_buf[(buf_length * index)..(buf_length * (index + 1))]
+                })
+                .collect();
+            let mut parity_chunks: Vec<Vec<u8>> = vec![vec![0; buf_length]; parity_chunks];
+
+            encoder.encode_sep::<&[u8], Vec<u8>>(&data_chunks, &mut parity_chunks)?;
+
+            let config = &config;
+            targets
+                .iter()
+                .zip(
+                    data_chunks
+                        .into_iter()
+                        .chain(parity_chunks.iter().map(AsRef::as_ref)),
+                )
+                .map(|(target, data)| async move {
+                    let mut data: &[u8] = &data;
+                    let reader: &mut &[u8] = &mut data;
+                    match target.write_from_reader(&config, reader).await {
+                        Ok(_) => {},
+                        Err(err) => {
+                            eprintln!("Error {}: {}", target, err);
+                        },
+                    }
+                })
+                .collect::<FuturesUnordered<_>>()
+                .collect::<Vec<()>>()
+                .await;
         },
         Command::GetHashes {
             deduplicate,
@@ -235,4 +336,45 @@ async fn run() -> Result<(), Box<dyn Error>> {
         },
     }
     Ok(())
+}
+
+fn get_shard_encoder(
+    data_chunks: Option<DataChunkCount>,
+    parity_chunks: Option<ParityChunkCount>,
+    targets: &[ClusterLocation],
+) -> Result<(usize, usize, ReedSolomon<galois_8::Field>), Box<dyn Error>> {
+    let parity_chunks: usize = parity_chunks
+        .ok_or_else(|| ErrorMessage::from("Parity Chunk Count must be known to decode shards"))?
+        .into();
+    let data_chunks = match data_chunks {
+        Some(data_chunks) => {
+            let data_chunks: usize = data_chunks.into();
+            let expected = data_chunks + parity_chunks;
+            if targets.len() == expected {
+                data_chunks
+            } else {
+                let msg = format!(
+                    "Invalid targets: Expected {} targets but got {}",
+                    expected,
+                    targets.len(),
+                );
+                return Err(ErrorMessage::from(msg).into());
+            }
+        },
+        None if targets.len() <= parity_chunks => {
+            let msg = format!(
+                "Invalid targets: Expected more than {} targets but got {}",
+                parity_chunks,
+                targets.len(),
+            );
+            return Err(ErrorMessage::from(msg).into());
+        },
+        None => targets.len() - parity_chunks,
+    };
+
+    Ok((
+        data_chunks,
+        parity_chunks,
+        ReedSolomon::new(data_chunks, parity_chunks)?,
+    ))
 }
