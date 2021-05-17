@@ -53,6 +53,8 @@ impl Tunables {
 struct TunablesInner {
     #[serde(default = "TunablesInner::https_only")]
     https_only: bool,
+    #[serde(default = "TunablesInner::on_conflict")]
+    on_conflict: OnConflict,
     #[serde(default = "TunablesInner::user_agent")]
     user_agent: Option<String>,
 }
@@ -72,6 +74,14 @@ macro_rules! default_getters {
 default_getters! {
     https_only: bool,
     user_agent: Option<String>,
+    on_conflict: OnConflict,
+}
+
+#[derive(Copy, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum OnConflict {
+    Ignore,
+    Overwrite,
 }
 
 impl Default for TunablesInner {
@@ -79,6 +89,7 @@ impl Default for TunablesInner {
         TunablesInner {
             https_only: false,
             user_agent: None,
+            on_conflict: OnConflict::Ignore,
         }
     }
 }
@@ -93,6 +104,11 @@ impl TunablesInner {
             }
             builder.build().unwrap()
         };
-        LocationContext::builder().http_client(http_client)
+        let builder = LocationContext::builder().http_client(http_client);
+        let builder = match &self.on_conflict {
+            OnConflict::Ignore => builder.conflict_ignore(),
+            OnConflict::Overwrite => builder.conflict_overwrite(),
+        };
+        builder
     }
 }
