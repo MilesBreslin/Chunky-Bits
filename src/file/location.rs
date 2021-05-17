@@ -91,8 +91,7 @@ impl Location {
             profiler,
             ..
         } = cx;
-        let profiler = profiler.as_ref();
-        let op_start = profiler.map(|_| Instant::now());
+        let profiler_info = profiler.as_ref().map(|profiler| (profiler, Instant::now()));
 
         use Location::*;
         let result: Result<Vec<u8>, LocationError> = match self {
@@ -109,8 +108,7 @@ impl Location {
             },
         };
 
-        if let Some(op_start) = op_start {
-            let profiler = profiler.unwrap();
+        if let Some((profiler, op_start)) = profiler_info {
             profiler.log_read(&result, self.clone(), op_start);
         }
         result
@@ -150,9 +148,21 @@ impl Location {
             profiler,
             ..
         } = cx;
-        let profiler = profiler.as_ref();
-        let op_start = profiler.map(|_| Instant::now());
+        let profiler_info = profiler.as_ref().map(|profiler| (profiler, Instant::now()));
         let length = bytes.as_ref().len();
+
+        match &cx.on_conflict {
+            OnConflict::Overwrite => {},
+            OnConflict::Ignore => {
+                if self.file_exists(cx).await? {
+                    let result = Ok(());
+                    if let Some((profiler, op_start)) = profiler_info {
+                        profiler.log_write(&result, self.clone(), length, op_start);
+                    }
+                    return result;
+                }
+            },
+        };
 
         use Location::*;
         let result: Result<(), LocationError> = async move {
@@ -176,8 +186,7 @@ impl Location {
         }
         .await;
 
-        if let Some(op_start) = op_start {
-            let profiler = profiler.unwrap();
+        if let Some((profiler, op_start)) = profiler_info {
             profiler.log_write(&result, self.clone(), length, op_start);
         }
         result
@@ -189,6 +198,14 @@ impl Location {
         reader: &mut (impl AsyncRead + Unpin),
     ) -> Result<u64, LocationError> {
         // TODO: Profiler
+        match &cx.on_conflict {
+            OnConflict::Overwrite => {},
+            OnConflict::Ignore => {
+                if self.file_exists(cx).await? {
+                    return Ok(0);
+                }
+            },
+        };
         use Location::*;
         match self {
             Local(path) => {
@@ -283,6 +300,23 @@ impl Location {
         }
     }
 
+    pub async fn file_exists(&self, cx: &LocationContext) -> Result<bool, LocationError> {
+        let LocationContext { http_client, .. } = cx;
+        use Location::*;
+        match self {
+            Http(url) => {
+                let url: Url = url.clone().into();
+                let resp = http_client.head(url).send().await?;
+                Ok(resp.status().is_success())
+            },
+            Local(path) => match fs::metadata(path).await {
+                Ok(_) => Ok(true),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+                Err(err) => Err(err.into()),
+            },
+        }
+    }
+
     pub fn default_context() -> LocationContext {
         Default::default()
     }
@@ -318,6 +352,7 @@ impl Location {
 
 #[derive(Clone)]
 pub struct LocationContext {
+    on_conflict: OnConflict,
     http_client: reqwest::Client,
     profiler: Option<Profiler>,
 }
@@ -339,27 +374,41 @@ impl LocationContext {
 
 #[derive(Default)]
 pub struct LocationContextBuilder {
+    on_conflict: Option<OnConflict>,
     http_client: Option<reqwest::Client>,
     profiler: Option<Profiler>,
 }
 
+#[derive(Clone)]
+enum OnConflict {
+    Overwrite,
+    Ignore,
+}
+
 impl LocationContextBuilder {
-    pub fn http_client(self, http_client: reqwest::Client) -> Self {
-        LocationContextBuilder {
-            http_client: Some(http_client),
-            profiler: self.profiler,
-        }
+    pub fn http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.http_client = Some(http_client);
+        self
     }
 
-    pub fn profiler(self, profiler: Profiler) -> Self {
-        LocationContextBuilder {
-            http_client: self.http_client,
-            profiler: Some(profiler),
-        }
+    pub fn profiler(mut self, profiler: Profiler) -> Self {
+        self.profiler = Some(profiler);
+        self
+    }
+
+    pub fn conflict_ignore(mut self) -> Self {
+        self.on_conflict = Some(OnConflict::Ignore);
+        self
+    }
+
+    pub fn conflict_overwrite(mut self) -> Self {
+        self.on_conflict = Some(OnConflict::Overwrite);
+        self
     }
 
     pub fn build(self) -> LocationContext {
         LocationContext {
+            on_conflict: self.on_conflict.unwrap_or(OnConflict::Overwrite),
             http_client: self.http_client.unwrap_or_else(reqwest::Client::new),
             profiler: self.profiler,
         }

@@ -3,7 +3,10 @@ use std::{
     str::FromStr,
 };
 
-use chunky_bits::file::Location;
+use chunky_bits::file::{
+    Location,
+    LocationContext,
+};
 use tempfile::tempdir;
 use tokio::io::AsyncReadExt;
 use url::Url;
@@ -56,7 +59,8 @@ mod http_server {
         let content: Arc<Mutex<HashMap<String, Vec<u8>>>> = Default::default();
         let content_put = content.clone();
         let get_filter = warp::get()
-            .map(move || content.clone())
+            .or(warp::head())
+            .map(move |_| content.clone())
             .and(warp::path::full())
             .and_then(
                 |content: Arc<Mutex<HashMap<String, Vec<u8>>>>, path: FullPath| async move {
@@ -140,6 +144,46 @@ async fn location_fs_reader_writer() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn location_fs_conflict_ignore() -> Result<(), Box<dyn Error>> {
+    let dir = tempdir()?;
+    let cx = LocationContext::builder().conflict_ignore().build();
+    let location = Location::from_str(&format!("{}/hello", dir.path().display()))?;
+    location.write_with_context(&cx, DEFAULT_PAYLOAD).await?;
+    let read_payload = location.read_with_context(&cx).await?;
+    if read_payload != DEFAULT_PAYLOAD {
+        panic!("Invalid first read payload");
+    }
+    let other_payload = "OTHER PAYLOAD".as_bytes();
+    location.write_with_context(&cx, other_payload).await?;
+    let read_payload = location.read_with_context(&cx).await?;
+    // Write should have been ignored
+    if read_payload != DEFAULT_PAYLOAD {
+        panic!("Invalid second read payload");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn location_fs_conflict_overwrite() -> Result<(), Box<dyn Error>> {
+    let dir = tempdir()?;
+    let cx = LocationContext::builder().conflict_overwrite().build();
+    let location = Location::from_str(&format!("{}/hello", dir.path().display()))?;
+    location.write_with_context(&cx, DEFAULT_PAYLOAD).await?;
+    let read_payload = location.read_with_context(&cx).await?;
+    if read_payload != DEFAULT_PAYLOAD {
+        panic!("Invalid first read payload");
+    }
+    let other_payload = "OTHER PAYLOAD".as_bytes();
+    location.write_with_context(&cx, other_payload).await?;
+    let read_payload = location.read_with_context(&cx).await?;
+    // File should have been rewritten
+    if read_payload != other_payload {
+        panic!("Invalid second read payload");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn location_http_read() -> Result<(), Box<dyn Error>> {
     let server = http_server::start(64000);
     let location = Location::from_str(&format!("{}", *server))?;
@@ -185,5 +229,45 @@ async fn location_http_reader_writer() -> Result<(), Box<dyn Error>> {
     reader.read_to_end(&mut bytes).await.unwrap();
     assert_eq!(bytes, new_bytes);
     server.kill().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn location_http_conflict_ignore() -> Result<(), Box<dyn Error>> {
+    let server = http_server::start(64004);
+    let cx = LocationContext::builder().conflict_ignore().build();
+    let location = Location::from_str(&format!("{}hello", *server))?;
+    location.write_with_context(&cx, DEFAULT_PAYLOAD).await?;
+    let read_payload = location.read_with_context(&cx).await?;
+    if read_payload != DEFAULT_PAYLOAD {
+        panic!("Invalid first read payload");
+    }
+    let other_payload = "OTHER PAYLOAD".as_bytes();
+    location.write_with_context(&cx, other_payload).await?;
+    let read_payload = location.read_with_context(&cx).await?;
+    // Write should have been ignored
+    if read_payload != DEFAULT_PAYLOAD {
+        panic!("Invalid second read payload");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+async fn location_http_conflict_overwrite() -> Result<(), Box<dyn Error>> {
+    let server = http_server::start(64005);
+    let cx = LocationContext::builder().conflict_overwrite().build();
+    let location = Location::from_str(&format!("{}hello", *server))?;
+    location.write_with_context(&cx, DEFAULT_PAYLOAD).await?;
+    let read_payload = location.read_with_context(&cx).await?;
+    if read_payload != DEFAULT_PAYLOAD {
+        panic!("Invalid first read payload");
+    }
+    let other_payload = "OTHER PAYLOAD".as_bytes();
+    location.write_with_context(&cx, other_payload).await?;
+    let read_payload = location.read_with_context(&cx).await?;
+    // File should have been rewritten
+    if read_payload != other_payload {
+        panic!("Invalid second read payload");
+    }
     Ok(())
 }
