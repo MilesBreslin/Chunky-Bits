@@ -102,6 +102,7 @@ pub enum LocationError {
     IoError(io::Error),
     HttpStatus(reqwest::StatusCode),
     HttpError(reqwest::Error),
+    WriteToRange,
 }
 
 impl Display for LocationError {
@@ -111,6 +112,7 @@ impl Display for LocationError {
             IoError(e) => write!(f, "IO: {}", e),
             HttpStatus(status) => write!(f, "Http Status: {}", status),
             HttpError(e) => write!(f, "Http Error: {}", e),
+            WriteToRange => write!(f, "Attempted to write to a location with a specified range"),
         }
     }
 }

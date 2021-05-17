@@ -194,11 +194,11 @@ impl ClusterLocation {
                     stream::once(future::ready(Ok(FileOrDirectory::File("-".into())))).boxed();
                 return Ok(stream);
             },
-            FileRef(Location::Local(path)) | Other(Location::Local(path)) => {
+            FileRef(Location::Local { path, .. }) | Other(Location::Local { path, .. }) => {
                 Ok(FileOrDirectory::list(&path).await?.boxed())
             },
-            FileRef(Location::Http(http)) | Other(Location::Http(http)) => {
-                let url: &Url = http.as_ref();
+            FileRef(Location::Http { url, .. }) | Other(Location::Http { url, .. }) => {
+                let url: &Url = url.as_ref();
                 let components = url
                     .path_segments()
                     .unwrap()
@@ -290,8 +290,8 @@ impl ClusterLocation {
                     .filter_map(OsStr::to_str)
                     .peekable();
                 let loc = match loc {
-                    Location::Http(http) => {
-                        let mut url: Url = http.clone().into();
+                    Location::Http { url, .. } => {
+                        let mut url: Url = url.clone().into();
                         let mut parent_components = url.path_segments().unwrap();
                         trim_components(&mut parent_components, &mut sub_components);
                         let mut path_seg = url.path_segments_mut().unwrap();
@@ -299,9 +299,12 @@ impl ClusterLocation {
                             path_seg.push(sub_part);
                         }
                         drop(path_seg);
-                        Location::Http(url.try_into().unwrap())
+                        Location::Http {
+                            url: url.try_into().unwrap(),
+                            range: Default::default(),
+                        }
                     },
-                    Location::Local(path) => {
+                    Location::Local { path, .. } => {
                         let mut parent_components = path
                             .components()
                             .filter_map(|comp| {
@@ -313,11 +316,13 @@ impl ClusterLocation {
                             })
                             .filter_map(OsStr::to_str);
                         trim_components(&mut parent_components, &mut sub_components);
-                        Location::Local(
-                            path.components()
+                        Location::Local {
+                            path: path
+                                .components()
                                 .chain(sub_components.map(|s| Component::Normal(s.as_ref())))
                                 .collect(),
-                        )
+                            range: Default::default(),
+                        }
                     },
                 };
                 match self {

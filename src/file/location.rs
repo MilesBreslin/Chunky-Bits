@@ -18,7 +18,10 @@ use futures::{
     stream::StreamExt,
 };
 use lazy_static::lazy_static;
-use reqwest::Body;
+use reqwest::{
+    header,
+    Body,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -32,6 +35,7 @@ use tokio::{
         self,
         AsyncRead,
         AsyncReadExt,
+        AsyncSeekExt,
         AsyncWriteExt,
     },
     sync::mpsc,
@@ -55,9 +59,11 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(untagged)]
+#[serde(try_from = "String")]
+#[serde(into = "String")]
 pub enum Location {
-    Http(HttpUrl),
-    Local(PathBuf),
+    Http { url: HttpUrl, range: Range },
+    Local { path: PathBuf, range: Range },
 }
 
 impl Location {
@@ -86,27 +92,18 @@ impl Location {
     }
 
     pub async fn read_with_context(&self, cx: &LocationContext) -> Result<Vec<u8>, LocationError> {
-        let LocationContext {
-            http_client,
-            profiler,
-            ..
-        } = cx;
+        let LocationContext { profiler, .. } = cx;
         let profiler_info = profiler.as_ref().map(|profiler| (profiler, Instant::now()));
 
-        use Location::*;
-        let result: Result<Vec<u8>, LocationError> = match self {
-            Local(path) => match fs::read(&path).await {
-                Ok(bytes) => Ok(bytes),
-                Err(err) => Err(err.into()),
-            },
-            Http(url) => match http_client.get(Url::from(url.clone())).send().await {
-                Ok(resp) => match resp.bytes().await {
-                    Ok(bytes) => Ok(bytes.into_iter().collect()),
-                    Err(err) => Err(err.into()),
-                },
-                Err(err) => Err(err.into()),
-            },
-        };
+        let result: Result<Vec<u8>, LocationError> = async move {
+            let mut out = Vec::new();
+            self.reader_with_context(cx)
+                .await?
+                .read_to_end(&mut out)
+                .await?;
+            Ok(out)
+        }
+        .await;
 
         if let Some((profiler, op_start)) = profiler_info {
             profiler.log_read(&result, self.clone(), op_start);
@@ -121,15 +118,47 @@ impl Location {
         // TODO: Profiler
         use Location::*;
         let result: Result<Pin<Box<dyn AsyncRead + Send + Unpin>>, _> = match self {
-            Local(path) => Ok(Box::pin(File::open(&path).await?)),
-            Http(url) => {
+            Local { path, range } => {
+                let mut file = File::open(&path).await?;
+                if range.is_specified() {
+                    file.seek(io::SeekFrom::Start(range.start)).await?;
+                    if let Some(length) = range.length {
+                        Ok(Box::pin(file.take(length)))
+                    } else {
+                        Ok(Box::pin(file))
+                    }
+                } else {
+                    Ok(Box::pin(file))
+                }
+            },
+            Http { url, range } => {
                 let url: Url = url.clone().into();
-                let s = cx.http_client.get(url).send().await?.bytes_stream();
+                let mut header_map = header::HeaderMap::new();
+                if range.is_specified() {
+                    let range_s = if let Some(length) = range.length {
+                        format!("{}-{}", range.start, length)
+                    } else {
+                        format!("{}-", range.start)
+                    };
+                    let header_value = header::HeaderValue::from_str(&range_s).unwrap();
+                    header_map.insert(header::RANGE, header_value);
+                }
+                let s = cx
+                    .http_client
+                    .get(url)
+                    .headers(header_map)
+                    .send()
+                    .await?
+                    .bytes_stream();
                 let reader = StreamReader::new(s.map(|res| match res {
                     Ok(bytes) => Ok(Cursor::new(bytes)),
                     Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
                 }));
-                Ok(Box::pin(reader))
+                if let Some(length) = range.length {
+                    Ok(Box::pin(reader.take(length)))
+                } else {
+                    Ok(Box::pin(reader))
+                }
             },
         };
         result
@@ -143,6 +172,10 @@ impl Location {
     where
         T: AsRef<[u8]> + Into<Vec<u8>>,
     {
+        if self.range().is_specified() {
+            return Err(LocationError::WriteToRange);
+        }
+
         let LocationContext {
             http_client,
             profiler,
@@ -167,13 +200,13 @@ impl Location {
         use Location::*;
         let result: Result<(), LocationError> = async move {
             match self {
-                Local(path) => {
+                Local { path, .. } => {
                     let mut file = File::create(&path).await?;
                     file.write_all(bytes.as_ref()).await?;
                     file.flush().await?;
                     Ok(())
                 },
-                Http(url) => {
+                Http { url, .. } => {
                     let response = http_client
                         .put(Url::from(url.clone()))
                         .body(bytes.into())
@@ -197,6 +230,10 @@ impl Location {
         cx: &LocationContext,
         reader: &mut (impl AsyncRead + Unpin),
     ) -> Result<u64, LocationError> {
+        if self.range().is_specified() {
+            return Err(LocationError::WriteToRange);
+        }
+
         // TODO: Profiler
         match &cx.on_conflict {
             OnConflict::Overwrite => {},
@@ -206,15 +243,16 @@ impl Location {
                 }
             },
         };
+
         use Location::*;
         match self {
-            Local(path) => {
+            Local { path, .. } => {
                 let mut file = File::create(&path).await?;
                 let bytes = io::copy(reader, &mut file).await?;
                 file.flush().await?;
                 Ok(bytes)
             },
-            Http(url) => {
+            Http { url, .. } => {
                 let url: Url = url.clone().into();
                 let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(5);
                 let cx = cx.clone();
@@ -264,12 +302,15 @@ impl Location {
     {
         use Location::*;
         let target_location: Location = match self {
-            Http(url) => {
+            Http { url, .. } => {
                 let mut target_url: Url = url.clone().into();
                 target_url.path_segments_mut().unwrap().push(name);
-                Http(HttpUrl(target_url))
+                Http {
+                    url: HttpUrl(target_url),
+                    range: Default::default(),
+                }
             },
-            Local(path) => {
+            Local { path, .. } => {
                 let mut target_path = path.clone();
                 target_path.push(name);
                 target_path.into()
@@ -288,12 +329,12 @@ impl Location {
         let LocationContext { http_client, .. } = cx;
         use Location::*;
         match self {
-            Http(url) => {
+            Http { url, .. } => {
                 let url: Url = url.clone().into();
                 http_client.delete(url).send().await?;
                 Ok(())
             },
-            Local(path) => {
+            Local { path, .. } => {
                 fs::remove_file(path).await?;
                 Ok(())
             },
@@ -304,14 +345,39 @@ impl Location {
         let LocationContext { http_client, .. } = cx;
         use Location::*;
         match self {
-            Http(url) => {
+            Http { url, .. } => {
                 let url: Url = url.clone().into();
                 let resp = http_client.head(url).send().await?;
                 Ok(resp.status().is_success())
             },
-            Local(path) => match fs::metadata(path).await {
+            Local { path, .. } => match fs::metadata(path).await {
                 Ok(_) => Ok(true),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+                Err(err) => Err(err.into()),
+            },
+        }
+    }
+
+    pub async fn file_len(&self, cx: &LocationContext) -> Result<u64, LocationError> {
+        let LocationContext { http_client, .. } = cx;
+        use Location::*;
+        match self {
+            Http { url, .. } => {
+                let url: Url = url.clone().into();
+                let resp = http_client.head(url).send().await?;
+                if resp.status().is_success() {
+                    if let Some(length) = resp.headers().get(header::RANGE) {
+                        if let Ok(length) = length.to_str() {
+                            if let Ok(length) = u64::from_str(length) {
+                                return Ok(length);
+                            }
+                        }
+                    }
+                }
+                todo!();
+            },
+            Local { path, .. } => match fs::metadata(path).await {
+                Ok(meta) => Ok(meta.len()),
                 Err(err) => Err(err.into()),
             },
         }
@@ -323,9 +389,12 @@ impl Location {
 
     pub fn is_child_of(&self, other: &Location) -> bool {
         let (left, right) = (self, other);
+        if left.range().is_specified() {
+            return false;
+        }
         use Location::*;
         match (left, right) {
-            (Http(left), Http(right)) => {
+            (Http { url: left, .. }, Http { url: right, .. }) => {
                 let (mut left, right): (Url, Url) = (left.clone().into(), right.clone().into());
                 if let Ok(mut left) = left.path_segments_mut() {
                     left.pop();
@@ -334,7 +403,7 @@ impl Location {
                 }
                 left == right
             },
-            (Local(left), Local(right)) => {
+            (Local { path: left, .. }, Local { path: right, .. }) => {
                 if let Some(left) = left.parent() {
                     left == right
                 } else {
@@ -347,6 +416,14 @@ impl Location {
 
     pub fn is_parent_of(&self, other: &Location) -> bool {
         other.is_child_of(self)
+    }
+
+    pub fn range(&self) -> &Range {
+        self.as_ref()
+    }
+
+    pub fn range_mut(&mut self) -> &mut Range {
+        self.as_mut()
     }
 }
 
@@ -417,7 +494,89 @@ impl LocationContextBuilder {
 
 impl fmt::Display for Location {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.serialize(f)
+        use Location::*;
+        match self {
+            Http { url, range } if range.is_specified() => write!(f, "{}{}", range, url),
+            Http { url, .. } => write!(f, "{}", url),
+            Local { path, range } if range.is_specified() => {
+                write!(f, "{}{}", range, path.display())
+            },
+            Local { path, .. } => write!(f, "{}", path.display()),
+        }
+    }
+}
+
+impl From<Location> for String {
+    fn from(loc: Location) -> String {
+        loc.to_string()
+    }
+}
+
+impl AsRef<Range> for Location {
+    fn as_ref(&self) -> &Range {
+        use Location::*;
+        match self {
+            Http { range, .. } | Local { range, .. } => range,
+        }
+    }
+}
+
+impl AsMut<Range> for Location {
+    fn as_mut(&mut self) -> &mut Range {
+        use Location::*;
+        match self {
+            Http { range, .. } | Local { range, .. } => range,
+        }
+    }
+}
+
+#[derive(Default, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Range {
+    #[serde(default)]
+    pub start: u64,
+    pub length: Option<u64>,
+}
+
+impl fmt::Display for Range {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match (self.start, self.length) {
+            (start, Some(length)) => write!(f, "%{}%{}%", start, length),
+            (start, None) => write!(f, "%{}%%", start),
+        }
+    }
+}
+
+impl Range {
+    pub fn is_specified(&self) -> bool {
+        self.start != 0 || self.length.is_some()
+    }
+
+    fn from_str_prefix<'a>(orig: &'a str) -> (Self, &'a str) {
+        let mut split = orig.splitn(4, '%');
+        if let Some("") = split.next() {
+        } else {
+            return (Default::default(), orig);
+        }
+        match (split.next(), split.next(), split.next()) {
+            (Some(start), Some(len), Some(suffix)) => {
+                let start = match start {
+                    "" => Ok(0),
+                    start => u64::from_str(start),
+                };
+                let len = match len {
+                    "" => Ok(None),
+                    len => Some(u64::from_str(len)).transpose(),
+                };
+                if let (Ok(start), Ok(length)) = (start, len) {
+                    let range = Range { start, length };
+                    return (range, suffix);
+                }
+                return (Default::default(), orig);
+            },
+            _ => {
+                return (Default::default(), orig);
+            },
+        }
     }
 }
 
@@ -438,17 +597,25 @@ impl FromStr for Location {
     type Err = LocationParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (range, s) = Range::from_str_prefix(s);
         if s.starts_with("http://") || s.starts_with("https://") {
-            return Ok(Location::Http(HttpUrl::from_str(s)?));
+            return Ok(Location::Http {
+                url: HttpUrl::from_str(s)?,
+                range,
+            });
         }
         if s.starts_with("file://") {
-            return Ok(Location::Local(
-                Url::parse(s)?
+            return Ok(Location::Local {
+                path: Url::parse(s)?
                     .to_file_path()
                     .map_err(|_| LocationParseError::FilePathNotAbsolute)?,
-            ));
+                range,
+            });
         }
-        Ok(Location::Local(FromStr::from_str(s).unwrap()))
+        Ok(Location::Local {
+            path: FromStr::from_str(s)?,
+            range,
+        })
     }
 }
 
@@ -457,11 +624,16 @@ impl TryFrom<Url> for Location {
 
     fn try_from(url: Url) -> Result<Self, Self::Error> {
         match url.scheme() {
-            "file" => Ok(Location::Local(
-                url.to_file_path()
+            "file" => Ok(Location::Local {
+                path: url
+                    .to_file_path()
                     .map_err(|_| LocationParseError::FilePathNotAbsolute)?,
-            )),
-            "http" => Ok(Location::Http(HttpUrl::try_from(url)?)),
+                range: Default::default(),
+            }),
+            "http" => Ok(Location::Http {
+                url: HttpUrl::try_from(url)?,
+                range: Default::default(),
+            }),
             _ => Err(LocationParseError::InvalidScheme),
         }
     }
@@ -471,6 +643,12 @@ impl TryFrom<Url> for Location {
 #[serde(try_from = "Url")]
 #[serde(into = "Url")]
 pub struct HttpUrl(Url);
+
+impl fmt::Display for HttpUrl {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        <Url as fmt::Display>::fmt(&self.0, f)
+    }
+}
 
 impl AsRef<Url> for HttpUrl {
     fn as_ref(&self) -> &Url {
@@ -528,7 +706,10 @@ macro_rules! impl_from_path {
     ($type:ty) => {
         impl From<$type> for Location {
             fn from(p: $type) -> Self {
-                Location::Local(p.to_owned())
+                Location::Local {
+                    path: p.to_owned(),
+                    range: Default::default(),
+                }
             }
         }
     };
@@ -538,6 +719,9 @@ impl_from_path!(PathBuf);
 
 impl From<HttpUrl> for Location {
     fn from(url: HttpUrl) -> Self {
-        Location::Http(url)
+        Location::Http {
+            url,
+            range: Default::default(),
+        }
     }
 }

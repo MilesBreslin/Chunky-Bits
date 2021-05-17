@@ -14,6 +14,11 @@ use chunky_bits::{
         DataChunkCount,
         ParityChunkCount,
     },
+    file::{
+        Chunk,
+        FilePart,
+        FileReference,
+    },
     http::cluster_filter,
 };
 use futures::stream::{
@@ -118,6 +123,11 @@ enum Command {
         #[structopt(short, long)]
         recursive: bool,
         target: ClusterLocation,
+    },
+    /// Reference the file in its existing location and add parity
+    Migrate {
+        source: ClusterLocation,
+        destination: ClusterLocation,
     },
     /// Resilver a cluster file
     Resilver {
@@ -322,6 +332,41 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     Ok(file) => println!("{}", file.as_ref().display()),
                     Err(err) => eprintln!("Error: {}", err),
                 }
+            }
+        },
+        Command::Migrate {
+            source,
+            destination,
+        } => {
+            let config = config.load_or_default().await?;
+            match &source {
+                ClusterLocation::Other(location) => {
+                    let location = location.clone();
+                    let mut reader = source.get_reader(&config).await?;
+                    let mut file_ref = FileReference::write_builder().write(&mut reader).await?;
+                    let mut bytes_seen: u64 = 0;
+                    for FilePart {
+                        ref chunksize,
+                        ref mut data,
+                        ..
+                    } in file_ref.parts.iter_mut()
+                    {
+                        let chunksize = *chunksize.as_ref().unwrap() as u64;
+                        for Chunk {
+                            ref mut locations, ..
+                        } in data.iter_mut()
+                        {
+                            let mut location = location.clone();
+                            let range = location.range_mut();
+                            range.start = bytes_seen;
+                            range.length = Some(chunksize);
+                            locations.push(location);
+                            bytes_seen += chunksize;
+                        }
+                    }
+                    serde_yaml::to_writer(&mut std::io::stdout(), &file_ref).unwrap();
+                },
+                _ => todo!(),
             }
         },
         Command::Resilver { target } => {
