@@ -360,6 +360,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                             let range = location.range_mut();
                             range.start = bytes_seen;
                             range.length = Some(chunksize);
+                            range.extend_zeros = true;
                             locations.push(location);
                             bytes_seen += chunksize;
                         }

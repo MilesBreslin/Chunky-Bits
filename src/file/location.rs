@@ -123,7 +123,11 @@ impl Location {
                 if range.is_specified() {
                     file.seek(io::SeekFrom::Start(range.start)).await?;
                     if let Some(length) = range.length {
-                        Ok(Box::pin(file.take(length)))
+                        if range.extend_zeros {
+                            Ok(Box::pin(file.chain(io::repeat(0)).take(length)))
+                        } else {
+                            Ok(Box::pin(file.take(length)))
+                        }
                     } else {
                         Ok(Box::pin(file))
                     }
@@ -155,7 +159,11 @@ impl Location {
                     Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
                 }));
                 if let Some(length) = range.length {
-                    Ok(Box::pin(reader.take(length)))
+                    if range.extend_zeros {
+                        Ok(Box::pin(reader.chain(io::repeat(0)).take(length)))
+                    } else {
+                        Ok(Box::pin(reader.take(length)))
+                    }
                 } else {
                     Ok(Box::pin(reader))
                 }
@@ -535,13 +543,17 @@ pub struct Range {
     #[serde(default)]
     pub start: u64,
     pub length: Option<u64>,
+    pub extend_zeros: bool,
 }
 
 impl fmt::Display for Range {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match (self.start, self.length) {
-            (start, Some(length)) => write!(f, "%{}%{}%", start, length),
-            (start, None) => write!(f, "%{}%%", start),
+        match self {
+            Range{start, length: Some(length), extend_zeros: false}
+                => write!(f, "%{}%{}%", start, length),
+            Range{start, length: Some(length), extend_zeros: true}
+                => write!(f, "%{}%0{}%", start, length),
+            Range{start, ..} => write!(f, "%{}%%", start),
         }
     }
 }
@@ -559,6 +571,7 @@ impl Range {
         }
         match (split.next(), split.next(), split.next()) {
             (Some(start), Some(len), Some(suffix)) => {
+                let extend_zeros = len.starts_with('0');
                 let start = match start {
                     "" => Ok(0),
                     start => u64::from_str(start),
@@ -568,7 +581,7 @@ impl Range {
                     len => Some(u64::from_str(len)).transpose(),
                 };
                 if let (Ok(start), Ok(length)) = (start, len) {
-                    let range = Range { start, length };
+                    let range = Range { start, length, extend_zeros };
                     return (range, suffix);
                 }
                 return (Default::default(), orig);
