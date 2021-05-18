@@ -75,7 +75,7 @@ use url::Url;
 
 use crate::{
     config::Config,
-    error_message::ErrorMessage,
+    error_message::PrefixError,
 };
 
 type FilesStreamer<'a> = BoxStream<'a, io::Result<FileOrDirectory>>;
@@ -96,21 +96,14 @@ impl ClusterLocation {
         let result: Result<Pin<Box<dyn AsyncRead + Send + Unpin>>>;
         match self {
             ClusterFile { cluster, path } => {
-                let cluster = config
-                    .get_cluster(&cluster)
-                    .await
-                    .map_err(ErrorMessage::new)?;
-                let file_ref = cluster
-                    .get_file_ref(&path)
-                    .await
-                    .map_err(ErrorMessage::new)?;
+                let cluster = config.get_cluster(&cluster).await.prefix_err(self)?;
+                let file_ref = cluster.get_file_ref(&path).await.prefix_err(self)?;
                 let reader = file_ref.read_builder_owned().reader_owned();
                 result = Ok(Box::pin(reader));
             },
             FileRef(loc) => {
-                let bytes = loc.read().await.map_err(ErrorMessage::new)?;
-                let file_ref: FileReference =
-                    serde_yaml::from_slice(&bytes).map_err(ErrorMessage::new)?;
+                let bytes = loc.read().await.prefix_err(self)?;
+                let file_ref: FileReference = serde_yaml::from_slice(&bytes).prefix_err(self)?;
                 let reader = file_ref.read_builder_owned().reader_owned();
                 result = Ok(Box::pin(reader));
             },
@@ -118,7 +111,7 @@ impl ClusterLocation {
                 let reader = loc
                     .reader_with_context(&Default::default())
                     .await
-                    .map_err(ErrorMessage::new)?;
+                    .prefix_err(self)?;
                 result = Ok(Box::pin(reader));
             },
             Stdio => {
@@ -141,11 +134,10 @@ impl ClusterLocation {
             } => {
                 let cluster = config.get_cluster(&cluster_name).await?;
                 let profile_name = config.get_profile(&cluster_name).await;
-                let profile = cluster
-                    .get_profile(profile_name.as_deref())
-                    .ok_or_else(|| {
-                        ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap()))
-                    })?;
+                let profile = match cluster.get_profile(profile_name.as_deref()) {
+                    Some(profile) => profile,
+                    None => bail!("Profile not found: {}", profile_name.unwrap()),
+                };
                 let file_ref = cluster.get_file_writer(&profile).write(reader).await?;
                 cluster.write_file_ref(path, &file_ref).await?;
                 Ok(file_ref.length.unwrap())
@@ -243,7 +235,6 @@ impl ClusterLocation {
                                 {
                                     Ok(s) => s,
                                     Err(err) => {
-                                        let err = ErrorMessage::from(&err.to_string());
                                         let result = io::Error::new(io::ErrorKind::Other, err);
                                         stream::once(future::ready(Err(result))).boxed()
                                     },
@@ -368,11 +359,10 @@ impl ClusterLocation {
             } => {
                 let cluster = config.get_cluster(&cluster_name).await?;
                 let profile_name = config.get_profile(&cluster_name).await;
-                let profile = cluster
-                    .get_profile(profile_name.as_deref())
-                    .ok_or_else(|| {
-                        ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap()))
-                    })?;
+                let profile = match cluster.get_profile(profile_name.as_deref()) {
+                    Some(profile) => profile,
+                    None => bail!("Profile not found: {}", profile_name.unwrap()),
+                };
                 let destination = cluster.get_destination(&profile);
                 let file_ref = cluster.get_file_ref(&path).await?;
                 let destination = Arc::new(destination);
@@ -412,28 +402,22 @@ impl ClusterLocation {
                 let report = file_ref.verify_owned().await;
                 Ok(report)
             },
-            _ => Err(ErrorMessage::from("Resilver is only supported on files").into()),
+            _ => bail!("Resilver is only supported on files"),
         }
     }
 
     pub async fn get_hashes(
         &self,
         config: &Config,
-    ) -> Result<BoxStream<'_, Result<AnyHash, Box<dyn Error + Send + Sync>>>, ErrorMessage> {
+    ) -> Result<BoxStream<'_, Result<AnyHash, Box<dyn Error + Send + Sync>>>> {
         use ClusterLocation::*;
         match self {
             ClusterFile {
                 cluster: cluster_name,
                 path,
             } => {
-                let cluster = config
-                    .get_cluster(&cluster_name)
-                    .await
-                    .map_err(ErrorMessage::with_prefix(self))?;
-                let file_ref = cluster
-                    .get_file_ref(&path)
-                    .await
-                    .map_err(ErrorMessage::with_prefix(self))?;
+                let cluster = config.get_cluster(&cluster_name).await.prefix_err(self)?;
+                let file_ref = cluster.get_file_ref(&path).await.prefix_err(self)?;
                 let iter =
                     file_ref
                         .parts
@@ -446,9 +430,8 @@ impl ClusterLocation {
                 Ok(stream::iter(iter).boxed())
             },
             FileRef(loc) => {
-                let bytes = loc.read().await.map_err(ErrorMessage::with_prefix(self))?;
-                let file_ref: FileReference =
-                    serde_yaml::from_slice(&bytes).map_err(ErrorMessage::with_prefix(self))?;
+                let bytes = loc.read().await.prefix_err(self)?;
+                let file_ref: FileReference = serde_yaml::from_slice(&bytes).prefix_err(self)?;
                 let iter =
                     file_ref
                         .parts
@@ -461,18 +444,9 @@ impl ClusterLocation {
                 Ok(stream::iter(iter).boxed())
             },
             Other(_) | Stdio => {
-                let data_chunks = config
-                    .get_default_data_chunks()
-                    .await
-                    .map_err(ErrorMessage::new)?;
-                let parity_chunks = config
-                    .get_default_parity_chunks()
-                    .await
-                    .map_err(ErrorMessage::new)?;
-                let chunk_size = config
-                    .get_default_chunk_size()
-                    .await
-                    .map_err(ErrorMessage::new)?;
+                let data_chunks = config.get_default_data_chunks().await?;
+                let parity_chunks = config.get_default_parity_chunks().await?;
+                let chunk_size = config.get_default_chunk_size().await?;
                 static WARNING: Once = Once::new();
                 WARNING.call_once(|| {
                     eprintln!(
@@ -482,10 +456,7 @@ impl ClusterLocation {
                         chunk_size,
                     );
                 });
-                let mut reader = self
-                    .get_reader(config)
-                    .await
-                    .map_err(ErrorMessage::with_prefix(self))?;
+                let mut reader = self.get_reader(config).await.prefix_err(self)?;
                 let file_ref = FileReference::write_builder()
                     .destination(())
                     .data_chunks(data_chunks.into())
@@ -493,7 +464,7 @@ impl ClusterLocation {
                     .chunk_size(1 << usize::from(chunk_size))
                     .write(&mut reader)
                     .await
-                    .map_err(ErrorMessage::with_prefix(self))?;
+                    .prefix_err(self)?;
                 let iter =
                     file_ref
                         .parts
@@ -518,11 +489,11 @@ impl ClusterLocation {
         let mut locations = target
             .list_cluster_locations(&config)
             .await
-            .map_err(ErrorMessage::with_prefix(self))?;
+            .prefix_err(self)?;
         while let Some(result) = locations.next().await {
             let hashes_tx = hashes_tx.clone();
             let config = config.clone();
-            let loc = result.map_err(ErrorMessage::new)?;
+            let loc = result?;
             tokio::spawn(async move {
                 let mut hashes = match loc.get_hashes(&config).await {
                     Ok(h) => h,
@@ -556,13 +527,12 @@ impl ClusterLocation {
                 let cluster = config
                     .get_cluster(&cluster_name)
                     .await
-                    .map_err(ErrorMessage::with_prefix(destination))?;
+                    .prefix_err(destination)?;
                 let profile_name = config.get_profile(&cluster_name).await;
-                let profile = cluster
-                    .get_profile(profile_name.as_deref())
-                    .ok_or_else(|| {
-                        ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap()))
-                    })?;
+                let profile = match cluster.get_profile(profile_name.as_deref()) {
+                    Some(profile) => profile,
+                    None => bail!("Profile not found: {}", profile_name.unwrap()),
+                };
                 let file_ref = self
                     .get_file_reference(
                         config,
@@ -574,7 +544,7 @@ impl ClusterLocation {
                 cluster
                     .write_file_ref(path, &file_ref)
                     .await
-                    .map_err(ErrorMessage::with_prefix(destination))?;
+                    .prefix_err(destination)?;
             },
             ClusterLocation::FileRef(location) => {
                 let file_ref = self
@@ -585,12 +555,11 @@ impl ClusterLocation {
                         config.get_default_chunk_size().await.unwrap(),
                     )
                     .await?;
-                let file_str = serde_json::to_string_pretty(&file_ref)
-                    .map_err(ErrorMessage::with_prefix(destination))?;
+                let file_str = serde_json::to_string_pretty(&file_ref).prefix_err(destination)?;
                 location
                     .write(file_str.as_bytes())
                     .await
-                    .map_err(ErrorMessage::with_prefix(destination))?;
+                    .prefix_err(destination)?;
             },
             _ => bail!("Cannot migrate to {}", destination),
         }
@@ -620,7 +589,7 @@ impl ClusterLocation {
                     .chunk_size(1 << usize::from(chunk_size))
                     .write(&mut reader)
                     .await
-                    .map_err(ErrorMessage::with_prefix(&location))?;
+                    .prefix_err(&location)?;
                 let mut bytes_seen: u64 = 0;
                 for FilePart {
                     ref chunksize,
@@ -654,18 +623,12 @@ impl ClusterLocation {
                 file_ref
             },
             ClusterLocation::FileRef(location) => {
-                let bytes = location.read().await.map_err(ErrorMessage::new)?;
-                serde_yaml::from_slice(&bytes).map_err(ErrorMessage::new)?
+                let bytes = location.read().await?;
+                serde_yaml::from_slice(&bytes)?
             },
             ClusterLocation::ClusterFile { cluster, path } => {
-                let cluster = config
-                    .get_cluster(&cluster)
-                    .await
-                    .map_err(ErrorMessage::new)?;
-                cluster
-                    .get_file_ref(&path)
-                    .await
-                    .map_err(ErrorMessage::new)?
+                let cluster = config.get_cluster(&cluster).await?;
+                cluster.get_file_ref(&path).await?
             },
             _ => todo!(),
         })
@@ -697,11 +660,9 @@ impl FromStr for ClusterLocation {
                     path: path.into(),
                 })
             },
-            (Some(cluster), Some(_), None) => {
-                Err(ErrorMessage::from(format!("Invalid cluster name: {}", cluster)).into())
-            },
+            (Some(cluster), Some(_), None) => bail!("Invalid cluster name: {}", cluster),
             (Some(_), None, None) => Ok(Location::from_str(s).map(Into::into)?),
-            _ => Err(ErrorMessage::from(format!("Invalid cluster location format: {}", s)).into()),
+            _ => bail!("Invalid cluster location format: {}", s),
         }
     }
 }

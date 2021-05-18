@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use anyhow::Result;
+
 #[derive(Debug)]
 pub struct ErrorMessage(String);
 impl ErrorMessage {
@@ -33,3 +35,20 @@ impl Display for ErrorMessage {
     }
 }
 impl Error for ErrorMessage {}
+
+pub trait PrefixError {
+    type Ok;
+    fn prefix_err<P: Display>(self, prefix: P) -> Result<Self::Ok>;
+}
+
+impl<T, E> PrefixError for Result<T, E>
+where
+    E: Display,
+{
+    type Ok = T;
+
+    fn prefix_err<P: Display>(self, prefix: P) -> Result<T> {
+        self.map_err(ErrorMessage::with_prefix(prefix))
+            .map_err(anyhow::Error::new)
+    }
+}

@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{
+    bail,
+    Result,
+};
 use chunky_bits::{
     cluster,
     cluster::sized_int::{
@@ -22,10 +25,7 @@ use serde::{
     Serialize,
 };
 
-use crate::{
-    config::Config,
-    error_message::ErrorMessage,
-};
+use crate::config::Config;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -71,11 +71,10 @@ impl AnyDestinationRef {
                     Some(profile_name) => Some(profile_name.clone()),
                     None => config.get_profile(&cluster_name).await,
                 };
-                let profile = cluster
-                    .get_profile(profile_name.as_deref())
-                    .ok_or_else(|| {
-                        ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap()))
-                    })?;
+                let profile = match cluster.get_profile(profile_name.as_deref()) {
+                    Some(profile) => profile,
+                    None => bail!("Profile not found: {}", profile_name.unwrap()),
+                };
                 let destination = cluster.get_destination(&profile);
                 AnyDestination::Cluster(destination)
             },

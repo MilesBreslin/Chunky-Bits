@@ -7,7 +7,10 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::Result;
+use anyhow::{
+    bail,
+    Result,
+};
 use chunky_bits::{
     cluster::sized_int::{
         ChunkSize,
@@ -38,7 +41,6 @@ pub mod error_message;
 use crate::{
     cluster_location::ClusterLocation,
     config::Config,
-    error_message::ErrorMessage,
 };
 
 /// An interface for Chunky Bits files and clusters.
@@ -139,7 +141,7 @@ async fn main() {
     match run().await {
         Ok(_) => {},
         Err(err) => {
-            eprintln!("{}", err);
+            eprintln!("{:?}", err);
             std::process::exit(1);
         },
     }
@@ -161,7 +163,7 @@ async fn run() -> Result<()> {
     match command {
         Command::Cat { targets } => {
             if targets.is_empty() {
-                return Err(ErrorMessage::from("At least 1 cat target must be specified").into());
+                bail!("At least 1 cat target must be specified");
             }
             let config = config.load_or_default().await?;
             let mut stdout = io::stdout();
@@ -355,9 +357,10 @@ fn get_shard_encoder(
     parity_chunks: Option<ParityChunkCount>,
     targets: &[ClusterLocation],
 ) -> Result<(usize, usize, ReedSolomon<galois_8::Field>)> {
-    let parity_chunks: usize = parity_chunks
-        .ok_or_else(|| ErrorMessage::from("Parity Chunk Count must be known to decode shards"))?
-        .into();
+    let parity_chunks: usize = match parity_chunks {
+        Some(parity_chunks) => parity_chunks.into(),
+        None => bail!("Parity Chunk Count must be known to decode shards"),
+    };
     let data_chunks = match data_chunks {
         Some(data_chunks) => {
             let data_chunks: usize = data_chunks.into();
@@ -365,21 +368,19 @@ fn get_shard_encoder(
             if targets.len() == expected {
                 data_chunks
             } else {
-                let msg = format!(
+                bail!(
                     "Invalid targets: Expected {} targets but got {}",
                     expected,
                     targets.len(),
                 );
-                return Err(ErrorMessage::from(msg).into());
             }
         },
         None if targets.len() <= parity_chunks => {
-            let msg = format!(
+            bail!(
                 "Invalid targets: Expected more than {} targets but got {}",
                 parity_chunks,
                 targets.len(),
             );
-            return Err(ErrorMessage::from(msg).into());
         },
         None => targets.len() - parity_chunks,
     };
