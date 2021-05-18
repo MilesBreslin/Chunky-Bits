@@ -22,6 +22,11 @@ use std::{
     },
 };
 
+use anyhow::{
+    anyhow,
+    bail,
+    Result,
+};
 use chunky_bits::{
     cluster::{
         sized_int::{
@@ -86,12 +91,9 @@ pub enum ClusterLocation {
 }
 
 impl ClusterLocation {
-    pub async fn get_reader(
-        &self,
-        config: &Config,
-    ) -> Result<impl AsyncRead + Send + Unpin + '_, ErrorMessage> {
+    pub async fn get_reader(&self, config: &Config) -> Result<impl AsyncRead + Send + Unpin + '_> {
         use ClusterLocation::*;
-        let result: Result<Pin<Box<dyn AsyncRead + Send + Unpin>>, ErrorMessage>;
+        let result: Result<Pin<Box<dyn AsyncRead + Send + Unpin>>>;
         match self {
             ClusterFile { cluster, path } => {
                 let cluster = config
@@ -130,7 +132,7 @@ impl ClusterLocation {
         &self,
         config: &Config,
         reader: &mut (impl AsyncRead + Unpin),
-    ) -> Result<u64, Box<dyn Error>> {
+    ) -> Result<u64> {
         use ClusterLocation::*;
         match self {
             ClusterFile {
@@ -183,10 +185,7 @@ impl ClusterLocation {
         }
     }
 
-    pub async fn list_files(
-        &self,
-        config: &Config,
-    ) -> Result<FilesStreamer<'static>, Box<dyn Error>> {
+    pub async fn list_files(&self, config: &Config) -> Result<FilesStreamer<'static>> {
         use ClusterLocation::*;
         match self {
             ClusterFile {
@@ -221,14 +220,14 @@ impl ClusterLocation {
     pub async fn list_files_recursive<'a>(
         &'a self,
         config: &'a Config,
-    ) -> Result<FilesStreamer<'a>, Box<dyn Error>> {
+    ) -> Result<FilesStreamer<'a>> {
         Self::list_files_recursive_inner(self, config).await
     }
 
     fn list_files_recursive_inner<'a>(
         self_outer: (impl Borrow<Self> + Clone + Send + Sync + 'a),
         config: &'a Config,
-    ) -> BoxFuture<'a, Result<FilesStreamer<'a>, Box<dyn Error>>> {
+    ) -> BoxFuture<'a, Result<FilesStreamer<'a>>> {
         async move {
             let mut stream = self_outer.borrow().list_files(config).await?;
             let top_level = stream.next().await;
@@ -345,7 +344,7 @@ impl ClusterLocation {
     pub async fn list_cluster_locations<'a>(
         &'a self,
         config: &'a Config,
-    ) -> Result<impl Stream<Item = io::Result<Self>> + 'a, Box<dyn Error>> {
+    ) -> Result<impl Stream<Item = io::Result<Self>> + 'a> {
         let stream = self
             .list_files_recursive(config)
             .await?
@@ -360,10 +359,7 @@ impl ClusterLocation {
         Ok(stream)
     }
 
-    pub async fn resilver(
-        &self,
-        config: &Config,
-    ) -> Result<ResilverFileReportOwned, Box<dyn Error>> {
+    pub async fn resilver(&self, config: &Config) -> Result<ResilverFileReportOwned> {
         use ClusterLocation::*;
         match self {
             ClusterFile {
@@ -394,11 +390,11 @@ impl ClusterLocation {
                 loc.write(file_str.as_bytes()).await?;
                 Ok(report)
             },
-            _ => Err(ErrorMessage::from("Resilver is only supported on cluster files").into()),
+            _ => bail!("Resilver is only supported on cluster files"),
         }
     }
 
-    pub async fn verify(&self, config: &Config) -> Result<VerifyFileReportOwned, Box<dyn Error>> {
+    pub async fn verify(&self, config: &Config) -> Result<VerifyFileReportOwned> {
         use ClusterLocation::*;
         match self {
             ClusterFile {
@@ -515,7 +511,7 @@ impl ClusterLocation {
     pub async fn get_hashes_rec(
         &self,
         config: impl Into<Arc<Config>>,
-    ) -> Result<impl Stream<Item = Result<AnyHash, ErrorMessage>>, ErrorMessage> {
+    ) -> Result<impl Stream<Item = Result<AnyHash>>> {
         let config = config.into();
         let target = self.clone();
         let (hashes_tx, hashes_rx) = mpsc::channel(50);
@@ -531,7 +527,7 @@ impl ClusterLocation {
                 let mut hashes = match loc.get_hashes(&config).await {
                     Ok(h) => h,
                     Err(err) => {
-                        let _ = hashes_tx.send(Err(ErrorMessage::new(err))).await;
+                        let _ = hashes_tx.send(Err(anyhow!("{}", err))).await;
                         return;
                     },
                 };
@@ -541,7 +537,7 @@ impl ClusterLocation {
                             let _ = hashes_tx.send(Ok(hash)).await;
                         },
                         Err(err) => {
-                            let _ = hashes_tx.send(Err(ErrorMessage::new(err))).await;
+                            let _ = hashes_tx.send(Err(anyhow!("{}", err))).await;
                         },
                     }
                 }
@@ -551,7 +547,7 @@ impl ClusterLocation {
         Ok(ReceiverStream::new(hashes_rx))
     }
 
-    pub async fn migrate(&self, config: &Config, destination: &Self) -> Result<(), ErrorMessage> {
+    pub async fn migrate(&self, config: &Config, destination: &Self) -> Result<()> {
         match destination {
             ClusterLocation::ClusterFile {
                 cluster: cluster_name,
@@ -596,12 +592,7 @@ impl ClusterLocation {
                     .await
                     .map_err(ErrorMessage::with_prefix(destination))?;
             },
-            _ => {
-                return Err(ErrorMessage::new(format!(
-                    "Cannot migrate to {}",
-                    destination
-                )));
-            },
+            _ => bail!("Cannot migrate to {}", destination),
         }
         Ok(())
     }
@@ -612,17 +603,12 @@ impl ClusterLocation {
         data_chunks: DataChunkCount,
         parity_chunks: ParityChunkCount,
         chunk_size: ChunkSize,
-    ) -> Result<FileReference, ErrorMessage> {
+    ) -> Result<FileReference> {
         match self {
             ClusterLocation::Other(_)
             | ClusterLocation::FileRef(_)
             | ClusterLocation::ClusterFile { .. } => {},
-            _ => {
-                return Err(ErrorMessage::new(format!(
-                    "Cannot get a file reference for {}",
-                    self
-                )));
-            },
+            _ => bail!("Cannot get a file reference for {}", self),
         }
         Ok(match &self {
             ClusterLocation::Other(location) => {
@@ -687,7 +673,7 @@ impl ClusterLocation {
 }
 
 impl FromStr for ClusterLocation {
-    type Err = Box<dyn Error>;
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if "-" == s {
@@ -747,7 +733,7 @@ impl From<Location> for ClusterLocation {
 macro_rules! impl_try_from_string {
     ($type:ty) => {
         impl TryFrom<$type> for ClusterLocation {
-            type Error = Box<dyn Error>;
+            type Error = anyhow::Error;
 
             fn try_from(s: $type) -> Result<Self, Self::Error> {
                 FromStr::from_str(AsRef::<str>::as_ref(&s))

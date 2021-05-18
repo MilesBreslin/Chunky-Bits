@@ -10,6 +10,7 @@ description = "Chunky Bits is simple, unmanaged, distributed HTTP object store t
 lto = true
 
 [dependencies]
+anyhow = "1"
 async-trait = "0.1"
 bytes = "1"
 futures = "0.3"
@@ -24,8 +25,8 @@ serde_yaml = "0.8"
 sha2 = { version = "0.9" }
 structopt = "0.3"
 tokio = { version = "1", features = [ "fs", "io-std", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "signal" ] }
-tokio-util = "0.6"
 tokio-stream = { version = "0.1", features = [ "fs" ] }
+tokio-util = "0.6"
 url = { version = "2.2", features = [ "serde" ] }
 warp = { version = "0.3" }
 

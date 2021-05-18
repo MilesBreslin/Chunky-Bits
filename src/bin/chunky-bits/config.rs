@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    error::Error,
     path::{
         Path,
         PathBuf,
@@ -8,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Result;
 use chunky_bits::{
     cluster::{
         sized_int::{
@@ -71,7 +71,7 @@ impl Config {
         Default::default()
     }
 
-    pub async fn get_cluster(&self, target: &str) -> Result<Arc<Cluster>, Box<dyn Error>> {
+    pub async fn get_cluster(&self, target: &str) -> Result<Arc<Cluster>> {
         if let Some(cluster) = self.cluster_cache.read().await.get(target) {
             return Ok(cluster.clone());
         }
@@ -115,7 +115,7 @@ impl Config {
         self.default_profile.clone()
     }
 
-    pub async fn get_default_destination(&self) -> Result<AnyDestination, Box<dyn Error>> {
+    pub async fn get_default_destination(&self) -> Result<AnyDestination> {
         let destination = self.default_destination.get_destination(self).await?;
         if destination.is_void() {
             eprintln!("Warning: Using void destination");
@@ -127,7 +127,7 @@ impl Config {
         &self,
         target: &str,
         profile_name: &Option<String>,
-    ) -> Result<ClusterProfile, Box<dyn Error>> {
+    ) -> Result<ClusterProfile> {
         let cluster = self.get_cluster(&target).await?;
         let profile_name: Option<String> = match profile_name {
             Some(profile_name) => Some(profile_name.clone()),
@@ -139,7 +139,7 @@ impl Config {
             .clone())
     }
 
-    pub async fn get_default_chunk_size(&self) -> Result<ChunkSize, Box<dyn Error>> {
+    pub async fn get_default_chunk_size(&self) -> Result<ChunkSize> {
         match &self.default_destination {
             AnyDestinationRef::Cluster {
                 cluster: cluster_name,
@@ -153,7 +153,7 @@ impl Config {
         }
     }
 
-    pub async fn get_default_data_chunks(&self) -> Result<DataChunkCount, Box<dyn Error>> {
+    pub async fn get_default_data_chunks(&self) -> Result<DataChunkCount> {
         match &self.default_destination {
             AnyDestinationRef::Cluster {
                 cluster: cluster_name,
@@ -168,7 +168,7 @@ impl Config {
         }
     }
 
-    pub async fn get_default_parity_chunks(&self) -> Result<ParityChunkCount, Box<dyn Error>> {
+    pub async fn get_default_parity_chunks(&self) -> Result<ParityChunkCount> {
         match &self.default_destination {
             AnyDestinationRef::Cluster {
                 cluster: cluster_name,
@@ -214,7 +214,7 @@ impl ConfigBuilder {
         new
     }
 
-    async fn load(path: Option<impl AsRef<Path>>) -> Result<Config, Box<dyn Error>> {
+    async fn load(path: Option<impl AsRef<Path>>) -> Result<Config> {
         let mut reader = match path {
             Some(path) => fs::File::open(path).await?,
             None => fs::File::open("/etc/chunky-bits.yaml").await?,
@@ -224,7 +224,7 @@ impl ConfigBuilder {
         Ok(serde_yaml::from_slice(&bytes)?)
     }
 
-    pub async fn load_or_default(self) -> Result<Config, Box<dyn Error>> {
+    pub async fn load_or_default(self) -> Result<Config> {
         let ConfigBuilder { defaults, path } = self;
         let config = if path.is_some() {
             Self::load(path).await

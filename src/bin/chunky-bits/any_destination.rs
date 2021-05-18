@@ -1,8 +1,6 @@
-use std::{
-    error::Error,
-    sync::Arc,
-};
+use std::sync::Arc;
 
+use anyhow::Result;
 use chunky_bits::{
     cluster,
     cluster::sized_int::{
@@ -62,7 +60,7 @@ impl AnyDestinationRef {
         matches!(self, AnyDestinationRef::Void { .. })
     }
 
-    pub async fn get_destination(&self, config: &Config) -> Result<AnyDestination, Box<dyn Error>> {
+    pub async fn get_destination(&self, config: &Config) -> Result<AnyDestination> {
         Ok(match self {
             AnyDestinationRef::Cluster {
                 cluster: cluster_name,

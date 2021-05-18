@@ -3,11 +3,11 @@ use std::{
         BTreeSet,
         HashSet,
     },
-    error::Error,
     net::SocketAddr,
     path::PathBuf,
 };
 
+use anyhow::Result;
 use chunky_bits::{
     cluster::sized_int::{
         ChunkSize,
@@ -145,7 +145,7 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), Box<dyn Error>> {
+async fn run() -> Result<()> {
     let Opt {
         command,
         config,
@@ -354,7 +354,7 @@ fn get_shard_encoder(
     data_chunks: Option<DataChunkCount>,
     parity_chunks: Option<ParityChunkCount>,
     targets: &[ClusterLocation],
-) -> Result<(usize, usize, ReedSolomon<galois_8::Field>), Box<dyn Error>> {
+) -> Result<(usize, usize, ReedSolomon<galois_8::Field>)> {
     let parity_chunks: usize = parity_chunks
         .ok_or_else(|| ErrorMessage::from("Parity Chunk Count must be known to decode shards"))?
         .into();
