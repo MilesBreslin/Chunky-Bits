@@ -317,7 +317,11 @@ impl FilePart {
                         })
                 })
                 .collect::<Vec<Option<&Location>>>();
-            for _ in data.iter().chain(parity.iter()).map(|chunk| chunk.locations.is_empty()) {
+            for _ in data
+                .iter()
+                .chain(parity.iter())
+                .map(|chunk| chunk.locations.is_empty())
+            {
                 chunks_request.push(None);
             }
             match destination.get_used_writers(&chunks_request) {
