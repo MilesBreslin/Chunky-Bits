@@ -35,6 +35,7 @@ use crate::{
 pub enum AnyDestinationRef {
     Cluster {
         cluster: String,
+        profile: Option<String>,
     },
     Locations {
         #[serde(default)]
@@ -65,9 +66,13 @@ impl AnyDestinationRef {
         Ok(match self {
             AnyDestinationRef::Cluster {
                 cluster: cluster_name,
+                profile: profile_name,
             } => {
                 let cluster = config.get_cluster(&cluster_name).await?;
-                let profile_name = config.get_profile(&cluster_name).await;
+                let profile_name = match profile_name {
+                    Some(profile_name) => Some(profile_name.clone()),
+                    None => config.get_profile(&cluster_name).await,
+                };
                 let profile = cluster
                     .get_profile(profile_name.as_deref())
                     .ok_or_else(|| {

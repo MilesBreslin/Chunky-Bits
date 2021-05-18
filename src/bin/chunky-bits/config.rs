@@ -126,52 +126,59 @@ impl Config {
     pub async fn get_cluster_profile(
         &self,
         target: &str,
+        profile_name: &Option<String>,
     ) -> Result<ClusterProfile, Box<dyn Error>> {
         let cluster = self.get_cluster(&target).await?;
-        let profile_name = self.get_profile(&target).await;
+        let profile_name: Option<String> = match profile_name {
+            Some(profile_name) => Some(profile_name.clone()),
+            None => self.get_profile(&target).await,
+        };
         let profile = cluster.get_profile(profile_name.as_deref());
         Ok(profile
             .unwrap_or_else(|| cluster.get_profile(None).unwrap())
             .clone())
     }
 
-    pub async fn get_default_chunk_size(&self) -> Result<usize, Box<dyn Error>> {
+    pub async fn get_default_chunk_size(&self) -> Result<ChunkSize, Box<dyn Error>> {
         match &self.default_destination {
             AnyDestinationRef::Cluster {
                 cluster: cluster_name,
+                profile: profile_name,
             } => {
-                let profile = self.get_cluster_profile(&cluster_name).await;
-                Ok(profile?.chunk_size.into())
+                let profile = self.get_cluster_profile(&cluster_name, profile_name).await;
+                Ok(profile?.chunk_size)
             },
             AnyDestinationRef::Locations { chunk_size, .. }
-            | AnyDestinationRef::Void { chunk_size, .. } => Ok((*chunk_size).into()),
+            | AnyDestinationRef::Void { chunk_size, .. } => Ok(*chunk_size),
         }
     }
 
-    pub async fn get_default_data_chunks(&self) -> Result<usize, Box<dyn Error>> {
+    pub async fn get_default_data_chunks(&self) -> Result<DataChunkCount, Box<dyn Error>> {
         match &self.default_destination {
             AnyDestinationRef::Cluster {
                 cluster: cluster_name,
+                profile: profile_name,
             } => {
-                let profile = self.get_cluster_profile(&cluster_name).await;
-                Ok(profile?.data_chunks.into())
+                let profile = self.get_cluster_profile(&cluster_name, profile_name).await;
+                Ok(profile?.data_chunks)
             },
             AnyDestinationRef::Locations { data, .. } | AnyDestinationRef::Void { data, .. } => {
-                Ok((*data).into())
+                Ok(*data)
             },
         }
     }
 
-    pub async fn get_default_parity_chunks(&self) -> Result<usize, Box<dyn Error>> {
+    pub async fn get_default_parity_chunks(&self) -> Result<ParityChunkCount, Box<dyn Error>> {
         match &self.default_destination {
             AnyDestinationRef::Cluster {
                 cluster: cluster_name,
+                profile: profile_name,
             } => {
-                let profile = self.get_cluster_profile(&cluster_name).await;
-                Ok(profile?.parity_chunks.into())
+                let profile = self.get_cluster_profile(&cluster_name, profile_name).await;
+                Ok(profile?.parity_chunks)
             },
             AnyDestinationRef::Locations { parity, .. }
-            | AnyDestinationRef::Void { parity, .. } => Ok((*parity).into()),
+            | AnyDestinationRef::Void { parity, .. } => Ok(*parity),
         }
     }
 }

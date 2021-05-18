@@ -302,7 +302,7 @@ impl FilePart {
                         Err(err) => Err(err.into()),
                     }
                 });
-            let chunks_request = chunk_status
+            let mut chunks_request = chunk_status
                 .iter()
                 .zip(data.iter().chain(parity.iter()))
                 .flat_map(|(status, chunk)| {
@@ -317,6 +317,9 @@ impl FilePart {
                         })
                 })
                 .collect::<Vec<Option<&Location>>>();
+            for _ in data.iter().chain(parity.iter()).map(|chunk| chunk.locations.is_empty()) {
+                chunks_request.push(None);
+            }
             match destination.get_used_writers(&chunks_request) {
                 Ok(mut writers) => {
                     let iter_mut = data
@@ -750,7 +753,6 @@ impl<'a> ResilverPartReport<'a> {
             })
             .flat_map(IntoIterator::into_iter);
         if successful_writes.next().is_some() {
-            println!("HAs successful_writes");
             return LocationIntegrity::Valid;
         };
         chunk_integrity

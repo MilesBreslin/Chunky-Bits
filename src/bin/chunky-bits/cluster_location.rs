@@ -23,7 +23,14 @@ use std::{
 };
 
 use chunky_bits::{
-    cluster::FileOrDirectory,
+    cluster::{
+        sized_int::{
+            ChunkSize,
+            ParityChunkCount,
+            DataChunkCount,
+        },
+        FileOrDirectory,
+    },
     file::{
         hash::AnyHash,
         Chunk,
@@ -157,9 +164,9 @@ impl ClusterLocation {
                 });
                 let file_ref = FileReference::write_builder()
                     .destination(destination)
-                    .data_chunks(data_chunks)
-                    .parity_chunks(parity_chunks)
-                    .chunk_size(1 << chunk_size)
+                    .data_chunks(data_chunks.into())
+                    .parity_chunks(parity_chunks.into())
+                    .chunk_size(1 << usize::from(chunk_size))
                     .write(reader)
                     .await?;
                 let file_str = serde_json::to_string_pretty(&file_ref)?;
@@ -374,6 +381,7 @@ impl ClusterLocation {
                 let file_ref = cluster.get_file_ref(&path).await?;
                 let destination = Arc::new(destination);
                 let report = file_ref.resilver_owned(destination).await;
+                cluster.write_file_ref(&path, report.as_ref()).await?;
                 Ok(report)
             },
             FileRef(loc) => {
@@ -381,6 +389,9 @@ impl ClusterLocation {
                 let file_ref: FileReference = serde_yaml::from_slice(&bytes)?;
                 let destination = config.get_default_destination().await?;
                 let report = file_ref.resilver_owned(destination).await;
+                let file_ref: &FileReference = report.as_ref();
+                let file_str = serde_json::to_string_pretty(file_ref)?;
+                loc.write(file_str.as_bytes()).await?;
                 Ok(report)
             },
             _ => Err(ErrorMessage::from("Resilver is only supported on cluster files").into()),
@@ -481,9 +492,9 @@ impl ClusterLocation {
                     .map_err(ErrorMessage::with_prefix(self))?;
                 let file_ref = FileReference::write_builder()
                     .destination(())
-                    .data_chunks(data_chunks)
-                    .parity_chunks(parity_chunks)
-                    .chunk_size(1 << chunk_size)
+                    .data_chunks(data_chunks.into())
+                    .parity_chunks(parity_chunks.into())
+                    .chunk_size(1 << usize::from(chunk_size))
                     .write(&mut reader)
                     .await
                     .map_err(ErrorMessage::with_prefix(self))?;
@@ -538,6 +549,122 @@ impl ClusterLocation {
         }
 
         Ok(ReceiverStream::new(hashes_rx))
+    }
+
+    pub async fn migrate(
+        &self,
+        config: &Config,
+        destination: &Self,
+    ) -> Result<(), ErrorMessage> {
+        match destination {
+            ClusterLocation::ClusterFile{cluster: cluster_name, path} => {
+                let cluster = config.get_cluster(&cluster_name).await
+                    .map_err(ErrorMessage::with_prefix(destination))?;
+                let profile_name = config.get_profile(&cluster_name).await;
+                let profile = cluster
+                    .get_profile(profile_name.as_deref())
+                    .ok_or_else(|| {
+                        ErrorMessage::from(format!("Profile not found: {}", profile_name.unwrap()))
+                    })?;
+                let file_ref = self.get_file_reference(
+                    config,
+                    profile.data_chunks,
+                    profile.parity_chunks,
+                    profile.chunk_size,
+                ).await?;
+                cluster.write_file_ref(path, &file_ref).await
+                    .map_err(ErrorMessage::with_prefix(destination))?;
+            },
+            ClusterLocation::FileRef(location) => {
+                let file_ref = self.get_file_reference(
+                    config,
+                    config.get_default_data_chunks().await.unwrap(),
+                    config.get_default_parity_chunks().await.unwrap(),
+                    config.get_default_chunk_size().await.unwrap(),
+                ).await?;
+                let file_str = serde_json::to_string_pretty(&file_ref)
+                    .map_err(ErrorMessage::with_prefix(destination))?;
+                location.write(file_str.as_bytes()).await
+                    .map_err(ErrorMessage::with_prefix(destination))?;
+            },
+            _ => {
+                return Err(ErrorMessage::new(format!("Cannot migrate to {}", destination)));
+            },
+        }
+        Ok(())
+    }
+
+    pub async fn get_file_reference(
+        &self,
+        config: &Config,
+        data_chunks: DataChunkCount,
+        parity_chunks: ParityChunkCount,
+        chunk_size: ChunkSize,
+    ) -> Result<FileReference, ErrorMessage> {
+        match self {
+            ClusterLocation::Other(_)
+            | ClusterLocation::FileRef(_)
+            | ClusterLocation::ClusterFile{..} => {},
+            _ => {
+                return Err(ErrorMessage::new(format!("Cannot get a file reference for {}", self)));
+            },
+        }
+        Ok(match &self {
+            ClusterLocation::Other(location) => {
+                let location = location.clone();
+                let mut reader = self.get_reader(&config).await?;
+                let mut file_ref = FileReference::write_builder()
+                    .data_chunks(data_chunks.into())
+                    .parity_chunks(parity_chunks.into())
+                    .chunk_size(1 << usize::from(chunk_size))
+                    .write(&mut reader).await
+                    .map_err(ErrorMessage::with_prefix(&location))?;
+                let mut bytes_seen: u64 = 0;
+                for FilePart {
+                    ref chunksize,
+                    ref mut data,
+                    ..
+                } in file_ref.parts.iter_mut()
+                {
+                    let chunksize = *chunksize.as_ref().unwrap() as u64;
+                    for Chunk {
+                        ref mut locations, ..
+                    } in data.iter_mut()
+                    {
+                        let mut location = location.clone();
+                        let range = location.range_mut();
+                        range.start = bytes_seen;
+                        range.length = Some(chunksize);
+                        locations.push(location);
+                        bytes_seen += chunksize;
+                    }
+                }
+                let last_location = file_ref.parts.last_mut()
+                    .map(|part| part.data.last_mut())
+                    .flatten()
+                    .map(|chunk| chunk.locations.last_mut())
+                    .flatten();
+                if let Some(location) = last_location {
+                    location.range_mut().extend_zeros = true;
+                }
+                file_ref
+            },
+            ClusterLocation::FileRef(location) => {
+                let bytes = location.read().await.map_err(ErrorMessage::new)?;
+                serde_yaml::from_slice(&bytes).map_err(ErrorMessage::new)?
+            },
+            ClusterLocation::ClusterFile{cluster, path} => {
+                let cluster = config
+                    .get_cluster(&cluster)
+                    .await
+                    .map_err(ErrorMessage::new)?;
+                cluster
+                    .get_file_ref(&path)
+                    .await
+                    .map_err(ErrorMessage::new)?
+            },
+            _ => todo!(),
+        })
     }
 }
 

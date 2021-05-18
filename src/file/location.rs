@@ -293,7 +293,6 @@ impl Location {
                 }
                 drop(tx);
                 response.await.unwrap()?;
-                eprintln!("Total: {}", total_bytes);
                 Ok(total_bytes)
             },
         }
@@ -550,10 +549,10 @@ impl fmt::Display for Range {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Range{start, length: Some(length), extend_zeros: false}
-                => write!(f, "%{}%{}%", start, length),
+                => write!(f, "({},{})", start, length),
             Range{start, length: Some(length), extend_zeros: true}
-                => write!(f, "%{}%0{}%", start, length),
-            Range{start, ..} => write!(f, "%{}%%", start),
+                => write!(f, "({},0{})", start, length),
+            Range{start, ..} => write!(f, "({},)", start),
         }
     }
 }
@@ -564,32 +563,26 @@ impl Range {
     }
 
     fn from_str_prefix<'a>(orig: &'a str) -> (Self, &'a str) {
-        let mut split = orig.splitn(4, '%');
-        if let Some("") = split.next() {
-        } else {
-            return (Default::default(), orig);
-        }
-        match (split.next(), split.next(), split.next()) {
-            (Some(start), Some(len), Some(suffix)) => {
-                let extend_zeros = len.starts_with('0');
-                let start = match start {
-                    "" => Ok(0),
-                    start => u64::from_str(start),
-                };
-                let len = match len {
-                    "" => Ok(None),
-                    len => Some(u64::from_str(len)).transpose(),
-                };
-                if let (Ok(start), Ok(length)) = (start, len) {
-                    let range = Range { start, length, extend_zeros };
-                    return (range, suffix);
+        if let Some(("", suffix)) = orig.split_once('(') {
+            if let Some((inner, suffix)) = suffix.split_once(')') {
+                if let Some((left,right)) = inner.split_once(',') {
+                    let extend_zeros = right.starts_with('0');
+                    let start = u64::from_str(left);
+                    let length = (!right.is_empty())
+                        .then(|| u64::from_str(right))
+                        .transpose();
+                    if let (Ok(start), Ok(length)) = (start, length) {
+                        let range = Range{
+                            start,
+                            length,
+                            extend_zeros,
+                        };
+                        return (range, suffix);
+                    }
                 }
-                return (Default::default(), orig);
-            },
-            _ => {
-                return (Default::default(), orig);
-            },
+            }
         }
+        (Default::default(), orig)
     }
 }
 
