@@ -97,6 +97,9 @@ enum Command {
         source: ClusterLocation,
         targets: Vec<ClusterLocation>,
     },
+    FileInfo {
+        source: ClusterLocation,
+    },
     /// Get all the known hashes for a location
     GetHashes {
         /// Deduplicate all hashes
@@ -266,6 +269,18 @@ async fn run() -> Result<()> {
                 .collect::<FuturesUnordered<_>>()
                 .collect::<Vec<()>>()
                 .await;
+        },
+        Command::FileInfo { source } => {
+            let config = config.load_or_default().await?;
+            let file_ref = source
+                .get_file_reference(
+                    &config,
+                    config.get_default_data_chunks().await?,
+                    config.get_default_parity_chunks().await?,
+                    config.get_default_chunk_size().await?,
+                )
+                .await?;
+            serde_yaml::to_writer(&mut std::io::stdout(), &file_ref)?;
         },
         Command::GetHashes {
             deduplicate,

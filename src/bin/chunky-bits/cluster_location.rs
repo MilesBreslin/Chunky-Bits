@@ -550,9 +550,9 @@ impl ClusterLocation {
                 let file_ref = self
                     .get_file_reference(
                         config,
-                        config.get_default_data_chunks().await.unwrap(),
-                        config.get_default_parity_chunks().await.unwrap(),
-                        config.get_default_chunk_size().await.unwrap(),
+                        config.get_default_data_chunks().await?,
+                        config.get_default_parity_chunks().await?,
+                        config.get_default_chunk_size().await?,
                     )
                     .await?;
                 let file_str = serde_json::to_string_pretty(&file_ref).prefix_err(destination)?;
