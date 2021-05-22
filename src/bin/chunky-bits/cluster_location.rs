@@ -140,7 +140,7 @@ impl ClusterLocation {
                 };
                 let file_ref = cluster.get_file_writer(&profile).write(reader).await?;
                 cluster.write_file_ref(path, &file_ref).await?;
-                Ok(file_ref.length.unwrap())
+                Ok(file_ref.len_bytes())
             },
             FileRef(loc) => {
                 let destination = config.get_default_destination().await?;
@@ -165,7 +165,7 @@ impl ClusterLocation {
                     .await?;
                 let file_str = serde_json::to_string_pretty(&file_ref)?;
                 loc.write(file_str.as_bytes()).await?;
-                Ok(file_ref.length.unwrap())
+                Ok(file_ref.len_bytes())
             },
             Other(loc) => Ok(loc
                 .write_from_reader_with_context(&Default::default(), reader)
@@ -597,7 +597,7 @@ impl ClusterLocation {
                     ..
                 } in file_ref.parts.iter_mut()
                 {
-                    let chunksize = *chunksize.as_ref().unwrap() as u64;
+                    let chunksize = *chunksize as u64;
                     for Chunk {
                         ref mut locations, ..
                     } in data.iter_mut()

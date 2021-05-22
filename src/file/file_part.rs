@@ -58,8 +58,7 @@ use crate::{
 pub struct FilePart {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encryption: Option<Encryption>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chunksize: Option<usize>,
+    pub chunksize: usize,
     pub data: Vec<Chunk>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub parity: Vec<Chunk>,
@@ -67,7 +66,7 @@ pub struct FilePart {
 
 impl FilePart {
     pub fn len_bytes(&self) -> usize {
-        let chunksize = self.chunksize.unwrap() as usize;
+        let chunksize = self.chunksize;
         chunksize * self.data.len()
     }
 
@@ -220,7 +219,7 @@ impl FilePart {
         }
         Ok(FilePart {
             encryption: None,
-            chunksize: Some(buf_length),
+            chunksize: buf_length,
             data: data_chunks,
             parity: parity_chunks,
         })
