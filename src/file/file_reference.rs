@@ -46,6 +46,15 @@ pub struct FileReference {
 }
 
 impl FileReference {
+    pub fn len_bytes(&self) -> u64 {
+        self.length.unwrap_or_else(|| {
+            self.parts
+                .iter()
+                .map(FilePart::len_bytes)
+                .fold(0, |acc, len| acc + len as u64)
+        })
+    }
+
     pub fn write_builder() -> FileWriteBuilder<()> {
         FileWriteBuilder::new()
     }
