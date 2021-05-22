@@ -66,6 +66,11 @@ pub struct FilePart {
 }
 
 impl FilePart {
+    pub fn len_bytes(&self) -> usize {
+        let chunksize = self.chunksize.unwrap() as usize;
+        chunksize * self.data.len()
+    }
+
     pub(crate) async fn read_with_context(
         &self,
         cx: &LocationContext,

@@ -24,6 +24,8 @@ pub struct FileReadBuilder<T> {
     file: T,
     buffer: usize,
     location_context: LocationContext,
+    seek: u64,
+    take: u64,
 }
 
 impl<T> FileReadBuilder<T> {
@@ -32,7 +34,24 @@ impl<T> FileReadBuilder<T> {
             file,
             buffer: 5,
             location_context: Default::default(),
+            seek: 0,
+            take: 0,
         }
+    }
+
+    pub fn seek(mut self, seek: u64) -> Self {
+        self.seek = seek;
+        self
+    }
+
+    pub fn take(mut self, take: u64) -> Self {
+        self.take = take;
+        self
+    }
+
+    pub fn buffer(mut self, buffer: usize) -> Self {
+        self.buffer = buffer;
+        self
     }
 
     pub fn location_context(self, location_context: LocationContext) -> FileReadBuilder<T> {
@@ -49,13 +68,38 @@ impl<T> FileReadBuilder<T> {
         let FileReadBuilder {
             buffer,
             location_context,
+            seek,
+            take,
             ..
         } = self;
-        let mut bytes_remaining: u64 = length;
+        let mut bytes_remaining: u64 = match take {
+            0 => length - *seek,
+            _ if length > *take => *take,
+            _ => length,
+        };
         let location_context = location_context.clone();
-        stream::iter(parts.map(move |part| {
+        let mut seek = *seek;
+        stream::iter(parts.filter_map(move |part| {
             let location_context = location_context.clone();
-            async move { part.borrow().read_with_context(&location_context).await }
+            let mut read_skip: usize = 0;
+            if seek != 0 {
+                let part_len = part.borrow().len_bytes() as u64;
+                if seek >= part_len {
+                    seek -= part_len;
+                    return None;
+                }
+                read_skip = seek as usize;
+                seek = 0;
+            }
+            Some(async move {
+                let mut bytes = part.borrow().read_with_context(&location_context).await?;
+                if bytes.len() < read_skip {
+                    bytes.drain(0..read_skip);
+                    Ok(bytes)
+                } else {
+                    Ok(vec![])
+                }
+            })
         }))
         .buffered(*buffer)
         .map(move |res| match res {
@@ -86,6 +130,15 @@ impl<T> FileReadBuilder<T>
 where
     T: Borrow<FileReference> + Send + Sync,
 {
+    pub fn buffer_bytes(mut self, bytes: usize) -> Self {
+        if let Some(part_len) = self.file.borrow().parts.first().map(FilePart::len_bytes) {
+            self.buffer = (bytes + (part_len / 2)) / part_len;
+            if self.buffer == 0 {
+                self.buffer = 1;
+            }
+        }
+        self
+    }
     pub fn stream_reader(&self) -> impl Stream<Item = Result<Vec<u8>, FileReadError>> + Send + '_ {
         let FileReference { parts, length, .. } = self.file.borrow();
         self.inner_stream_reader(parts.iter(), length.unwrap())
@@ -107,11 +160,15 @@ where
             buffer,
             location_context,
             file,
+            seek,
+            take,
         } = self;
         let new = FileReadBuilder {
             buffer,
             location_context,
             file: (),
+            seek,
+            take,
         };
         let file = file.into();
         let length = file.length.unwrap();
