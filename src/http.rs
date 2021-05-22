@@ -34,26 +34,25 @@ async fn index_get(
             let mut response_builder = Response::builder().status(StatusCode::OK);
             let mut file_reader = file_ref.read_builder_owned();
 
-            if let Some(HttpRange { start, end }) = range {
-                match (start, end) {
-                    (Some(start), Some(end)) => {
+            if let Some(range) = range {
+                match range {
+                    HttpRange::Range { start, end } => {
                         file_reader = file_reader.seek(start).take(end - start);
                     },
-                    (Some(start), None) => {
-                        file_reader = file_reader.seek(start);
+                    HttpRange::Prefix { length } => {
+                        file_reader = file_reader.seek(length);
                     },
-                    (None, Some(end)) => {
+                    HttpRange::Suffix { length } => {
                         let file_len = file_reader.file_reference().len_bytes();
-                        if end > file_len {
+                        if length > file_len {
                             return Ok(Response::builder()
                                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                                 .body(Body::empty())
                                 .unwrap());
                         }
-                        let start = file_len - end;
-                        file_reader = file_reader.seek(start).take(end);
+                        let start = file_len - length;
+                        file_reader = file_reader.seek(start).take(length);
                     },
-                    (None, None) => panic!("Invalid range"),
                 }
                 if file_reader.len_bytes() == 0 {
                     return Ok(Response::builder()
@@ -149,10 +148,11 @@ pub fn cluster_filter(
     cluster_filter_get(cluster.clone()).or(cluster_filter_put(cluster))
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct HttpRange {
-    start: Option<u64>,
-    end: Option<u64>,
+#[derive(Debug)]
+pub(crate) enum HttpRange {
+    Prefix { length: u64 },
+    Suffix { length: u64 },
+    Range { start: u64, end: u64 },
 }
 
 #[derive(Debug)]
@@ -194,17 +194,14 @@ impl FromStr for HttpRange {
                             },
                         };
                         match (start, end) {
-                            (Some(start), Some(end)) => {
-                                if start >= end {
-                                    return Err(HttpRangeError::InvalidLength);
-                                }
+                            (Some(start), Some(end)) if start >= end => {
+                                Err(HttpRangeError::InvalidLength)
                             },
-                            (None, None) => {
-                                return Err(HttpRangeError::NoRangeSpecified);
-                            },
-                            _ => {},
+                            (Some(start), Some(end)) => Ok(HttpRange::Range { start, end }),
+                            (Some(length), None) => Ok(HttpRange::Prefix { length }),
+                            (None, Some(length)) => Ok(HttpRange::Suffix { length }),
+                            (None, None) => Err(HttpRangeError::NoRangeSpecified),
                         }
-                        Ok(HttpRange { start, end })
                     },
                     _ => {
                         return Err(HttpRangeError::InvalidFormat);
