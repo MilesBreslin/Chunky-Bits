@@ -21,6 +21,7 @@ use lazy_static::lazy_static;
 use reqwest::{
     header,
     Body,
+    StatusCode,
 };
 use serde::{
     Deserialize,
@@ -140,20 +141,29 @@ impl Location {
                 let mut header_map = header::HeaderMap::new();
                 if range.is_specified() {
                     let range_s = if let Some(length) = range.length {
-                        format!("{}-{}", range.start, length)
+                        format!("bytes={}-{}", range.start, range.start + length - 1)
                     } else {
-                        format!("{}-", range.start)
+                        format!("bytes={}-", range.start)
                     };
                     let header_value = header::HeaderValue::from_str(&range_s).unwrap();
                     header_map.insert(header::RANGE, header_value);
                 }
-                let s = cx
+                let response = cx
                     .http_client
                     .get(url)
                     .headers(header_map)
                     .send()
                     .await?
-                    .bytes_stream();
+                    .error_for_status()?;
+                let status = response.status();
+                match status {
+                    StatusCode::OK if !range.is_specified() => {},
+                    StatusCode::PARTIAL_CONTENT if range.is_specified() => {},
+                    _ => {
+                        return Err(LocationError::HttpStatus(status));
+                    },
+                }
+                let s = response.bytes_stream();
                 let reader = StreamReader::new(s.map(|res| match res {
                     Ok(bytes) => Ok(Cursor::new(bytes)),
                     Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
