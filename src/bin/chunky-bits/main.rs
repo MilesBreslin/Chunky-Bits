@@ -38,6 +38,7 @@ pub mod any_destination;
 pub mod cluster_location;
 pub mod config;
 pub mod error_message;
+pub mod util;
 use crate::{
     cluster_location::ClusterLocation,
     config::Config,
@@ -169,10 +170,11 @@ async fn run() -> Result<()> {
                 bail!("At least 1 cat target must be specified");
             }
             let config = config.load_or_default().await?;
-            let mut stdout = io::stdout();
+
+            let destination = ClusterLocation::Stdio;
             for target in targets {
                 let mut reader = target.get_reader(&config).await?;
-                io::copy(&mut reader, &mut stdout).await?;
+                destination.write_from_reader(&config, &mut reader).await?;
             }
         },
         Command::ConfigInfo => {

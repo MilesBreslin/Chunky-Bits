@@ -76,6 +76,7 @@ use url::Url;
 use crate::{
     config::Config,
     error_message::PrefixError,
+    util,
 };
 
 type FilesStreamer<'a> = BoxStream<'a, io::Result<FileOrDirectory>>;
@@ -172,7 +173,7 @@ impl ClusterLocation {
                 .await?),
             Stdio => {
                 let mut writer = io::stdout();
-                Ok(io::copy(reader, &mut writer).await?)
+                Ok(util::io_copy(reader, &mut writer).await?)
             },
         }
     }

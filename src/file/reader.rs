@@ -51,7 +51,9 @@ impl<T> FileReadBuilder<T> {
             Some(async move {
                 let mut bytes = part.borrow().read_with_context(&location_context).await?;
                 if bytes.len() > read_skip {
-                    bytes.drain(0..read_skip);
+                    if read_skip != 0 {
+                        bytes.drain(0..read_skip);
+                    }
                     Ok(bytes)
                 } else {
                     Ok(vec![])
