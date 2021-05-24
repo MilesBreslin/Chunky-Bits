@@ -53,6 +53,7 @@ where
         drop(tx);
         Ok(total_bytes)
     };
+    let result = inner.await;
     write_handle.await??;
-    inner.await
+    result
 }
