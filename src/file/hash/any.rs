@@ -1,4 +1,7 @@
-use std::fmt;
+use std::{
+    fmt,
+    str::FromStr,
+};
 
 use serde::{
     Deserialize,
@@ -113,6 +116,40 @@ impl AsRef<[u8]> for AnyHash {
         use AnyHash::*;
         match self {
             Sha256(h) => h.as_ref(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum HashFromStrError {
+    Sha256(<Sha256Hash as FromStr>::Err),
+    UnknownHashFormat(String),
+    InvalidFormat,
+}
+
+impl fmt::Display for HashFromStrError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use HashFromStrError::*;
+        match self {
+            HashFromStrError::Sha256(err) => write!(f, "Invalid Sha256 Hash: {}", err),
+            UnknownHashFormat(s) => write!(f, "Unknown Hash Format: {}", s),
+            InvalidFormat => write!(f, "Invalid hash format"),
+        }
+    }
+}
+
+impl std::error::Error for HashFromStrError {}
+
+impl FromStr for AnyHash {
+    type Err = HashFromStrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.split_once('-') {
+            Some(("sha256", hex)) => Sha256Hash::from_str(hex)
+                .map(Into::into)
+                .map_err(|err| HashFromStrError::Sha256(err)),
+            Some((hash_type, _)) => Err(HashFromStrError::UnknownHashFormat(hash_type.to_string())),
+            None => Err(HashFromStrError::InvalidFormat),
         }
     }
 }

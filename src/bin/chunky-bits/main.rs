@@ -1,10 +1,14 @@
 use std::{
     collections::{
         BTreeSet,
+        HashMap,
         HashSet,
     },
+    ffi::OsStr,
     net::SocketAddr,
     path::PathBuf,
+    str::FromStr,
+    sync::Arc,
 };
 
 use anyhow::{
@@ -12,14 +16,22 @@ use anyhow::{
     Result,
 };
 use chunky_bits::{
-    cluster::sized_int::{
-        ChunkSize,
-        DataChunkCount,
-        ParityChunkCount,
+    cluster::{
+        sized_int::{
+            ChunkSize,
+            DataChunkCount,
+            ParityChunkCount,
+        },
+        FileOrDirectory,
+    },
+    file::{
+        hash::AnyHash,
+        Location,
     },
     http::cluster_filter,
 };
 use futures::stream::{
+    self,
     FuturesOrdered,
     FuturesUnordered,
     StreamExt,
@@ -29,10 +41,13 @@ use reed_solomon_erasure::{
     ReedSolomon,
 };
 use structopt::StructOpt;
-use tokio::io::{
-    self,
-    AsyncReadExt,
-    AsyncWriteExt,
+use tokio::{
+    fs,
+    io::{
+        self,
+        AsyncReadExt,
+        AsyncWriteExt,
+    },
 };
 pub mod any_destination;
 pub mod cluster_location;
@@ -100,6 +115,17 @@ enum Command {
     },
     FileInfo {
         source: ClusterLocation,
+    },
+    /// Find all hashes that are not referenced
+    FindUnusedHashes {
+        #[structopt(long, default_value = "100000")]
+        batch_size: usize,
+        #[structopt(short, long)]
+        remove: bool,
+        #[structopt(required(true), min_values(1))]
+        source: Vec<ClusterLocation>,
+        #[structopt(last(true), required(true), min_values(1))]
+        hashes: Vec<ClusterLocation>,
     },
     /// Get all the known hashes for a location
     GetHashes {
@@ -283,6 +309,108 @@ async fn run() -> Result<()> {
                 )
                 .await?;
             serde_yaml::to_writer(&mut std::io::stdout(), &file_ref)?;
+        },
+        Command::FindUnusedHashes {
+            batch_size,
+            remove,
+            source,
+            hashes,
+        } => {
+            let config = config.load_or_default().await?;
+            let config = Arc::new(config);
+            let source = source
+                .into_iter()
+                .map(|source| match source {
+                    ClusterLocation::ClusterFile { .. } | ClusterLocation::FileRef(..) => {
+                        Ok(source)
+                    },
+                    _ => bail!("Unsupported source location: {}", source),
+                })
+                .collect::<Result<Vec<ClusterLocation>>>()?;
+            let hashes = hashes
+                .into_iter()
+                .map(|hashes| match &hashes {
+                    ClusterLocation::Other(Location::Local { .. }) => Ok(hashes),
+                    _ => bail!("Unsupported hashes location: {}", hashes),
+                })
+                .collect::<Result<Vec<ClusterLocation>>>()?;
+            let list_files = stream::iter(
+                hashes
+                    .iter()
+                    .map(|location| (location, location.list_files_recursive(&config))),
+            )
+            .then(|(location, future)| async move {
+                match future.await {
+                    Ok(stream) => stream
+                        .map(move |result| match result {
+                            Ok(file) => Ok(file),
+                            Err(err) => bail!("{}: {}", location, err),
+                        })
+                        .boxed(),
+                    Err(err) => stream::once(async move { bail!("{}: {}", location, err) }).boxed(),
+                }
+            })
+            .flatten()
+            .peekable();
+            tokio::pin!(list_files);
+            while let Some(_) = list_files.as_mut().peek().await {
+                let mut existing_hashes = HashMap::new();
+                while let Some(result) = list_files.next().await {
+                    match result {
+                        Ok(FileOrDirectory::File(path)) => {
+                            if let Some(file_name) = path.file_name().map(OsStr::to_str).flatten() {
+                                match AnyHash::from_str(file_name) {
+                                    Ok(hash) => {
+                                        existing_hashes.insert(hash, path);
+                                    },
+                                    Err(_) => {
+                                        eprintln!("Unknown hash: {}", file_name)
+                                    },
+                                }
+                            }
+                        },
+                        Ok(_) => {},
+                        Err(err) => {
+                            eprintln!("{}", err);
+                        },
+                    }
+                    if existing_hashes.len() >= batch_size {
+                        break;
+                    }
+                }
+
+                let source_hashes = stream::iter(
+                    source
+                        .iter()
+                        .map(|source| source.get_hashes_rec(config.clone())),
+                )
+                .then(|future| async move {
+                    match future.await {
+                        Ok(stream) => stream.boxed(),
+                        Err(err) => stream::once(async move { Err(err) }).boxed(),
+                    }
+                })
+                .flatten();
+                tokio::pin!(source_hashes);
+                while let Some(result) = source_hashes.next().await {
+                    match result {
+                        Ok(hash) => {
+                            existing_hashes.remove(&hash);
+                        },
+                        Err(err) => {
+                            eprintln!("{}", err);
+                        },
+                    }
+                }
+
+                for (hash, path) in existing_hashes.into_iter() {
+                    println!("{} {}", hash, path.display());
+                    if remove {
+                        eprintln!("Removing {}", path.display());
+                        fs::remove_file(path).await?;
+                    }
+                }
+            }
         },
         Command::GetHashes {
             deduplicate,
