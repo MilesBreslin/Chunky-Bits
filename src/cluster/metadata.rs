@@ -6,6 +6,7 @@ use std::{
         Path,
         PathBuf,
     },
+    ops::Deref,
 };
 
 use futures::{
@@ -39,10 +40,11 @@ use crate::{
 };
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 #[serde(tag = "type")]
 pub enum MetadataTypes {
     Path(MetadataPath),
+    Git(MetadataGit),
 }
 
 impl MetadataTypes {
@@ -56,6 +58,7 @@ impl MetadataTypes {
     {
         match self {
             MetadataTypes::Path(meta_path) => meta_path.write(path, payload).await,
+            MetadataTypes::Git(meta_git) => meta_git.write(path, payload).await,
         }
     }
 
@@ -65,6 +68,7 @@ impl MetadataTypes {
     {
         match self {
             MetadataTypes::Path(meta_path) => meta_path.read(path).await,
+            MetadataTypes::Git(meta_git) => meta_git.read(path).await,
         }
     }
 
@@ -75,6 +79,9 @@ impl MetadataTypes {
         match self {
             MetadataTypes::Path(meta_path) => {
                 Ok(meta_path.list(path).await.map_err(LocationError::from)?)
+            },
+            MetadataTypes::Git(meta_git) => {
+                Ok(meta_git.list(path).await.map_err(LocationError::from)?)
             },
         }
     }
@@ -186,6 +193,118 @@ impl MetadataPath {
         new_path
     }
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(from = "MetadataGitSerde")]
+#[serde(into = "MetadataGitSerde")]
+pub struct MetadataGit(MetadataPath);
+
+impl Deref for MetadataGit {
+    type Target = MetadataPath;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl MetadataGit {
+    pub async fn write<T>(
+        &self,
+        path: impl AsRef<Path>,
+        payload: &T,
+    ) -> Result<(), MetadataReadError>
+    where
+        T: Serialize,
+    {
+        let orig_path: PathBuf = path.as_ref().to_owned();
+        let path = self.sub_path(path);
+        let payload = self.format.to_string(payload)?;
+        fs::write(&path, payload)
+            .await
+            .map_err(LocationError::from)?;
+        let res = Command::new("git")
+            .arg("add")
+            .arg(&path)
+            .current_dir(&self.path)
+            .spawn()
+            .unwrap()
+            .wait()
+            .await;
+        match res {
+            Ok(status) => {
+                match status.code().unwrap() {
+                    0 => {},
+                    code => {
+                        panic!("Unexpected status code: {}", code);
+                    },
+                }
+            }
+            Err(err) => {
+                return Err(MetadataReadError::PostExec(err));
+            },
+        }
+        let res = Command::new("git")
+            .arg("commit")
+            .arg("-m")
+            .arg(format!("Write {}", orig_path.display()))
+            .current_dir(&self.path)
+            .spawn()
+            .unwrap()
+            .wait()
+            .await;
+        match res {
+            Ok(status) => {
+                match status.code().unwrap() {
+                    0 => {},
+                    code => {
+                        panic!("Unexpected status code: {}", code);
+                    },
+                }
+            }
+            Err(err) => {
+                return Err(MetadataReadError::PostExec(err));
+            },
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct MetadataGitSerde {
+    #[serde(default)]
+    pub format: MetadataFormat,
+    pub path: PathBuf,
+}
+
+impl From<MetadataGitSerde> for MetadataGit {
+    fn from(meta: MetadataGitSerde) -> Self {
+        let MetadataGitSerde{
+            format,
+            path,
+        } = meta;
+        MetadataGit(MetadataPath{
+            format,
+            path,
+            put_script: None,
+            fail_on_script_error: false,
+        })
+    }
+}
+
+impl From<MetadataGit> for MetadataGitSerde {
+    fn from(meta: MetadataGit) -> Self {
+        let MetadataGit(MetadataPath{
+            format,
+            path,
+            put_script: _,
+            fail_on_script_error: _,
+        }) = meta;
+        MetadataGitSerde{
+            format,
+            path,
+        }
+    }
+}
+
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
