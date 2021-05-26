@@ -359,7 +359,9 @@ async fn run() -> Result<()> {
                             if let Some(file_name) = path.file_name().map(OsStr::to_str).flatten() {
                                 match AnyHash::from_str(file_name) {
                                     Ok(hash) => {
-                                        existing_hashes.insert(hash, path);
+                                        existing_hashes.entry(hash)
+                                            .or_insert(Vec::new())
+                                            .push(path);
                                     },
                                     Err(_) => {
                                         eprintln!("Unknown hash: {}", file_name)
@@ -401,11 +403,13 @@ async fn run() -> Result<()> {
                     }
                 }
 
-                for (hash, path) in existing_hashes.into_iter() {
-                    println!("{} {}", hash, path.display());
+                for (hash, paths) in existing_hashes.into_iter() {
+                    println!("{}", hash);
                     if remove {
-                        eprintln!("Removing {}", path.display());
-                        fs::remove_file(path).await?;
+                        for path in paths {
+                            eprintln!("Removing {}", path.display());
+                            fs::remove_file(path).await?;
+                        }
                     }
                 }
             }
@@ -469,7 +473,7 @@ async fn run() -> Result<()> {
             };
             while let Some(file_res) = files.next().await {
                 match file_res {
-                    Ok(file) => println!("{}", file.as_ref().display()),
+                    Ok(file) => println!("{}", file),
                     Err(err) => eprintln!("Error: {}", err),
                 }
             }
