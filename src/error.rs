@@ -218,10 +218,12 @@ impl_from_err! {
 
 #[derive(Debug)]
 pub enum MetadataReadError {
+    ExitCode(i32),
     FileRead(LocationError),
     InvalidLocation(LocationParseError),
     PostExec(io::Error),
     Serde(SerdeError),
+    Signal,
 }
 
 impl_from_err! {
@@ -236,10 +238,12 @@ impl Display for MetadataReadError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         use MetadataReadError::*;
         match self {
+            ExitCode(code) => write!(f, "Exit Code: {}", code),
             FileRead(e) => write!(f, "File Read: {}", e),
             InvalidLocation(e) => write!(f, "Invalid Location: {}", e),
             PostExec(e) => write!(f, "Post-Execution: {}", e),
             Serde(e) => write!(f, "Serde: {}", e),
+            Signal => write!(f, "Signal"),
         }
     }
 }

@@ -1,12 +1,12 @@
 use std::{
     convert::TryInto,
     fmt,
+    ops::Deref,
     path::{
         Component,
         Path,
         PathBuf,
     },
-    ops::Deref,
 };
 
 use futures::{
@@ -121,8 +121,15 @@ impl MetadataPath {
                 .wait()
                 .await;
             if self.fail_on_script_error {
-                if let Err(err) = res {
-                    return Err(MetadataReadError::PostExec(err));
+                match res {
+                    Ok(status) => match status.code() {
+                        Some(0) => {},
+                        Some(code) => return Err(MetadataReadError::ExitCode(code)),
+                        None => return Err(MetadataReadError::Signal),
+                    },
+                    Err(err) => {
+                        return Err(MetadataReadError::PostExec(err));
+                    },
                 }
             }
         }
@@ -197,12 +204,15 @@ impl MetadataPath {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(from = "MetadataGitSerde")]
 #[serde(into = "MetadataGitSerde")]
-pub struct MetadataGit(MetadataPath);
+pub struct MetadataGit {
+    meta_path: MetadataPath,
+}
 
 impl Deref for MetadataGit {
     type Target = MetadataPath;
+
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.meta_path
     }
 }
 
@@ -223,21 +233,18 @@ impl MetadataGit {
             .map_err(LocationError::from)?;
         let res = Command::new("git")
             .arg("add")
-            .arg(&path)
+            .arg(&orig_path)
             .current_dir(&self.path)
             .spawn()
             .unwrap()
             .wait()
             .await;
         match res {
-            Ok(status) => {
-                match status.code().unwrap() {
-                    0 => {},
-                    code => {
-                        panic!("Unexpected status code: {}", code);
-                    },
-                }
-            }
+            Ok(status) => match status.code() {
+                Some(0) => {},
+                Some(code) => return Err(MetadataReadError::ExitCode(code)),
+                None => return Err(MetadataReadError::Signal),
+            },
             Err(err) => {
                 return Err(MetadataReadError::PostExec(err));
             },
@@ -252,14 +259,11 @@ impl MetadataGit {
             .wait()
             .await;
         match res {
-            Ok(status) => {
-                match status.code().unwrap() {
-                    0 => {},
-                    code => {
-                        panic!("Unexpected status code: {}", code);
-                    },
-                }
-            }
+            Ok(status) => match status.code() {
+                Some(0) => {},
+                Some(code) => return Err(MetadataReadError::ExitCode(code)),
+                None => return Err(MetadataReadError::Signal),
+            },
             Err(err) => {
                 return Err(MetadataReadError::PostExec(err));
             },
@@ -277,34 +281,29 @@ struct MetadataGitSerde {
 
 impl From<MetadataGitSerde> for MetadataGit {
     fn from(meta: MetadataGitSerde) -> Self {
-        let MetadataGitSerde{
-            format,
-            path,
-        } = meta;
-        MetadataGit(MetadataPath{
+        let MetadataGitSerde { format, path } = meta;
+        let meta_path = MetadataPath {
             format,
             path,
             put_script: None,
             fail_on_script_error: false,
-        })
+        };
+        MetadataGit { meta_path }
     }
 }
 
 impl From<MetadataGit> for MetadataGitSerde {
     fn from(meta: MetadataGit) -> Self {
-        let MetadataGit(MetadataPath{
+        let MetadataGit { meta_path } = meta;
+        let MetadataPath {
             format,
             path,
             put_script: _,
             fail_on_script_error: _,
-        }) = meta;
-        MetadataGitSerde{
-            format,
-            path,
-        }
+        } = meta_path;
+        MetadataGitSerde { format, path }
     }
 }
-
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
