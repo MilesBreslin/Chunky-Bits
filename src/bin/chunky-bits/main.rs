@@ -91,7 +91,7 @@ struct Opt {
 enum Command {
     /// Concatenate files together
     Cat {
-        #[structopt(min_values(1))]
+        #[structopt(required(true), min_values(1))]
         targets: Vec<ClusterLocation>,
     },
     /// Show the parsed configuration definition
@@ -107,10 +107,12 @@ enum Command {
         destination: ClusterLocation,
     },
     DecodeShards {
+        #[structopt(required(true), min_values(1))]
         targets: Vec<ClusterLocation>,
     },
     EncodeShards {
         source: ClusterLocation,
+        #[structopt(required(true), min_values(1))]
         targets: Vec<ClusterLocation>,
     },
     FileInfo {
@@ -192,11 +194,7 @@ async fn run() -> Result<()> {
         .path(config);
     match command {
         Command::Cat { targets } => {
-            if targets.is_empty() {
-                bail!("At least 1 cat target must be specified");
-            }
             let config = config.load_or_default().await?;
-
             let destination = ClusterLocation::Stdio;
             for target in targets {
                 let mut reader = target.get_reader(&config).await?;
