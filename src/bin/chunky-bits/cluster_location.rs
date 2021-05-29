@@ -651,10 +651,9 @@ impl FromStr for ClusterLocation {
             (Some(cluster), Some(path), None)
                 if !(cluster
                     .chars()
-                    .next()
+                    .last()
                     .as_ref()
-                    .map_or(false, char::is_ascii_alphanumeric)
-                    && cluster.len() == 1) =>
+                    .map_or(false, char::is_ascii_alphanumeric)) =>
             {
                 Ok(ClusterLocation::ClusterFile {
                     cluster: cluster.to_string(),
