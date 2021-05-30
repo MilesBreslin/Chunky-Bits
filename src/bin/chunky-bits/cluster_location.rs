@@ -656,8 +656,10 @@ impl FromStr for ClusterLocation {
             (Some("-"), None, ..) => ClusterLocation::Stdio,
             (Some("@"), Some(path), None) => ClusterLocation::FileRef(Location::from_str(path)?),
             (Some(prefix), Some(path), None) if (prefix.ends_with(']') && prefix.contains('[')) => {
-                if let Some(index) = prefix.rfind(']') {
+                if let Some(index) = prefix.rfind('[') {
                     let (cluster, profile) = prefix.split_at(index);
+                    let profile = profile.trim_end_matches(']');
+                    let profile = profile.trim_start_matches('[');
                     ClusterLocation::ClusterFile {
                         cluster: cluster.to_string(),
                         profile: Some(profile.to_string()),
