@@ -7,7 +7,10 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Result;
+use anyhow::{
+    anyhow,
+    Result,
+};
 use chunky_bits::{
     cluster::{
         sized_int::{
@@ -35,7 +38,7 @@ use crate::{
         AnyDestination,
         AnyDestinationRef,
     },
-    error_message::ErrorMessage,
+    error_message::PrefixError,
 };
 
 #[derive(Serialize, Deserialize, Default)]
@@ -84,15 +87,16 @@ impl Config {
 
         let cluster: Arc<Cluster>;
         if is_valid_localname {
-            let cluster_info = self.clusters.get(target).ok_or_else(|| {
-                ErrorMessage::from(format!("Cluster not defined in configuration: {}", target))
-            })?;
+            let cluster_info = self
+                .clusters
+                .get(target)
+                .ok_or_else(|| anyhow!("Cluster not defined in configuration: {}", target))?;
             cluster = match &cluster_info.cluster {
                 ClusterType::Inline(cluster) => cluster.clone(),
                 ClusterType::Location(loc) => {
                     let cluster = Cluster::from_location(loc.clone())
                         .await
-                        .map_err(ErrorMessage::with_prefix(target))?;
+                        .prefix_err(target)?;
                     Arc::new(cluster)
                 },
             };
