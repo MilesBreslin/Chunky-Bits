@@ -173,7 +173,7 @@ async fn main() {
     match run().await {
         Ok(_) => {},
         Err(err) => {
-            eprintln!("{:?}", err);
+            eprintln!("{}", err);
             std::process::exit(1);
         },
     }

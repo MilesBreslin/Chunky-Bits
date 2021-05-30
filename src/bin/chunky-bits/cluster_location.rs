@@ -652,40 +652,32 @@ impl FromStr for ClusterLocation {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut split = s.split('#');
-        match (split.next(), split.next(), split.next()) {
-            (Some("-"), None, ..) => Ok(ClusterLocation::Stdio),
-            (Some("@"), Some(path), None) => {
-                Ok(ClusterLocation::FileRef(Location::from_str(path)?))
-            },
+        Ok(match (split.next(), split.next(), split.next()) {
+            (Some("-"), None, ..) => ClusterLocation::Stdio,
+            (Some("@"), Some(path), None) => ClusterLocation::FileRef(Location::from_str(path)?),
             (Some(prefix), Some(path), None) if (prefix.ends_with(']') && prefix.contains('[')) => {
                 if let Some(index) = prefix.rfind(']') {
                     let (cluster, profile) = prefix.split_at(index);
-                    Ok(ClusterLocation::ClusterFile {
+                    ClusterLocation::ClusterFile {
                         cluster: cluster.to_string(),
                         profile: Some(profile.to_string()),
                         path: path.into(),
-                    })
+                    }
                 } else {
                     bail!("Internal Error: Did not find the `[` in the cluster");
                 }
             },
-            (Some(cluster), Some(path), None)
-                if !(cluster
-                    .chars()
-                    .last()
-                    .as_ref()
-                    .map_or(false, char::is_ascii_alphanumeric)) =>
-            {
-                Ok(ClusterLocation::ClusterFile {
+            (Some(cluster), Some(path), None) => match cluster.chars().last() {
+                Some(c) if c.is_ascii_alphanumeric() => ClusterLocation::ClusterFile {
                     cluster: cluster.to_string(),
                     profile: None,
                     path: path.into(),
-                })
+                },
+                _ => bail!("Invalid cluster name/file: {}", cluster),
             },
-            (Some(cluster), Some(_), None) => bail!("Invalid cluster name: {}", cluster),
-            (Some(_), None, None) => Ok(Location::from_str(s).map(Into::into)?),
+            (Some(_), None, None) => Location::from_str(s).map(Into::into)?,
             _ => bail!("Invalid cluster location format: {}", s),
-        }
+        })
     }
 }
 
