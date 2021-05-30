@@ -34,6 +34,8 @@ use chunky_bits::{
             DataChunkCount,
             ParityChunkCount,
         },
+        Cluster,
+        ClusterProfile,
         FileOrDirectory,
     },
     file::{
@@ -85,7 +87,11 @@ type FilesStreamer<'a> = BoxStream<'a, io::Result<FileOrDirectory>>;
 #[serde(try_from = "String")]
 #[serde(into = "String")]
 pub enum ClusterLocation {
-    ClusterFile { cluster: String, path: PathBuf },
+    ClusterFile {
+        cluster: String,
+        profile: Option<String>,
+        path: PathBuf,
+    },
     FileRef(Location),
     Other(Location),
     Stdio,
@@ -96,7 +102,7 @@ impl ClusterLocation {
         use ClusterLocation::*;
         let result: Result<Pin<Box<dyn AsyncRead + Send + Unpin>>>;
         match self {
-            ClusterFile { cluster, path } => {
+            ClusterFile { cluster, path, .. } => {
                 let cluster = config.get_cluster(&cluster).await.prefix_err(self)?;
                 let file_ref = cluster.get_file_ref(&path).await.prefix_err(self)?;
                 let reader = file_ref.read_builder_owned().reader_owned();
@@ -129,16 +135,11 @@ impl ClusterLocation {
     ) -> Result<u64> {
         use ClusterLocation::*;
         match self {
-            ClusterFile {
-                cluster: cluster_name,
-                path,
-            } => {
-                let cluster = config.get_cluster(&cluster_name).await?;
-                let profile_name = config.get_profile(&cluster_name).await;
-                let profile = match cluster.get_profile(profile_name.as_deref()) {
-                    Some(profile) => profile,
-                    None => bail!("Profile not found: {}", profile_name.unwrap()),
-                };
+            ClusterFile { path, .. } => {
+                let (cluster, profile) = self
+                    .get_cluster_with_profile(&config)
+                    .await
+                    .prefix_err(self)?;
                 let file_ref = cluster.get_file_writer(&profile).write(reader).await?;
                 cluster.write_file_ref(path, &file_ref).await?;
                 Ok(file_ref.len_bytes())
@@ -181,11 +182,8 @@ impl ClusterLocation {
     pub async fn list_files(&self, config: &Config) -> Result<FilesStreamer<'static>> {
         use ClusterLocation::*;
         match self {
-            ClusterFile {
-                cluster: cluster_name,
-                path,
-            } => {
-                let cluster = config.get_cluster(&cluster_name).await?;
+            ClusterFile { cluster, path, .. } => {
+                let cluster = config.get_cluster(&cluster).await?;
                 return Ok(cluster.list_files(path).await?.boxed());
             },
             Stdio => {
@@ -254,8 +252,11 @@ impl ClusterLocation {
 
     fn make_sub_location(&self, new_path: PathBuf) -> Self {
         match self {
-            ClusterLocation::ClusterFile { cluster, .. } => ClusterLocation::ClusterFile {
+            ClusterLocation::ClusterFile {
+                cluster, profile, ..
+            } => ClusterLocation::ClusterFile {
                 cluster: cluster.clone(),
+                profile: profile.clone(),
                 path: new_path,
             },
             ClusterLocation::Other(loc) | ClusterLocation::FileRef(loc) => {
@@ -354,16 +355,8 @@ impl ClusterLocation {
     pub async fn resilver(&self, config: &Config) -> Result<ResilverFileReportOwned> {
         use ClusterLocation::*;
         match self {
-            ClusterFile {
-                cluster: cluster_name,
-                path,
-            } => {
-                let cluster = config.get_cluster(&cluster_name).await?;
-                let profile_name = config.get_profile(&cluster_name).await;
-                let profile = match cluster.get_profile(profile_name.as_deref()) {
-                    Some(profile) => profile,
-                    None => bail!("Profile not found: {}", profile_name.unwrap()),
-                };
+            ClusterFile { path, .. } => {
+                let (cluster, profile) = self.get_cluster_with_profile(&config).await?;
                 let destination = cluster.get_destination(&profile);
                 let file_ref = cluster.get_file_ref(&path).await?;
                 let destination = Arc::new(destination);
@@ -391,6 +384,7 @@ impl ClusterLocation {
             ClusterFile {
                 cluster: cluster_name,
                 path,
+                ..
             } => {
                 let cluster = config.get_cluster(&cluster_name).await?;
                 let file_ref = cluster.get_file_ref(&path).await?;
@@ -416,6 +410,7 @@ impl ClusterLocation {
             ClusterFile {
                 cluster: cluster_name,
                 path,
+                ..
             } => {
                 let cluster = config.get_cluster(&cluster_name).await.prefix_err(self)?;
                 let file_ref = cluster.get_file_ref(&path).await.prefix_err(self)?;
@@ -521,19 +516,8 @@ impl ClusterLocation {
 
     pub async fn migrate(&self, config: &Config, destination: &Self) -> Result<()> {
         match destination {
-            ClusterLocation::ClusterFile {
-                cluster: cluster_name,
-                path,
-            } => {
-                let cluster = config
-                    .get_cluster(&cluster_name)
-                    .await
-                    .prefix_err(destination)?;
-                let profile_name = config.get_profile(&cluster_name).await;
-                let profile = match cluster.get_profile(profile_name.as_deref()) {
-                    Some(profile) => profile,
-                    None => bail!("Profile not found: {}", profile_name.unwrap()),
-                };
+            ClusterLocation::ClusterFile { path, .. } => {
+                let (cluster, profile) = self.get_cluster_with_profile(&config).await?;
                 let file_ref = self
                     .get_file_reference(
                         config,
@@ -627,12 +611,39 @@ impl ClusterLocation {
                 let bytes = location.read().await?;
                 serde_yaml::from_slice(&bytes)?
             },
-            ClusterLocation::ClusterFile { cluster, path } => {
+            ClusterLocation::ClusterFile { cluster, path, .. } => {
                 let cluster = config.get_cluster(&cluster).await?;
                 cluster.get_file_ref(&path).await?
             },
             _ => todo!(),
         })
+    }
+
+    async fn get_cluster_with_profile<'a>(
+        &self,
+        config: &Config,
+    ) -> Result<(Arc<Cluster>, ClusterProfile)> {
+        let profile_string;
+        let (cluster_str, mut profile_str) = match self {
+            ClusterLocation::ClusterFile {
+                cluster, profile, ..
+            } => (cluster, profile.as_ref()),
+            _ => bail!("Internal Error: Not a cluster"),
+        };
+        let cluster = config.get_cluster(&cluster_str).await?;
+        if profile_str.is_none() {
+            if let Some(p) = config.get_profile(cluster_str).await {
+                profile_string = p;
+                profile_str = Some(&profile_string);
+            }
+        }
+        let profile = cluster.get_profile(profile_str.map(AsRef::as_ref));
+        let profile = match profile {
+            Some(profile) => profile,
+            None => bail!("Profile not found: {}", profile_str.unwrap()),
+        };
+        let profile = profile.clone();
+        Ok((cluster, profile))
     }
 }
 
@@ -640,13 +651,23 @@ impl FromStr for ClusterLocation {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if "-" == s {
-            return Ok(ClusterLocation::Stdio);
-        }
         let mut split = s.split('#');
         match (split.next(), split.next(), split.next()) {
+            (Some("-"), None, ..) => Ok(ClusterLocation::Stdio),
             (Some("@"), Some(path), None) => {
                 Ok(ClusterLocation::FileRef(Location::from_str(path)?))
+            },
+            (Some(prefix), Some(path), None) if (prefix.ends_with(']') && prefix.contains('[')) => {
+                if let Some(index) = prefix.rfind(']') {
+                    let (cluster, profile) = prefix.split_at(index);
+                    Ok(ClusterLocation::ClusterFile {
+                        cluster: cluster.to_string(),
+                        profile: Some(profile.to_string()),
+                        path: path.into(),
+                    })
+                } else {
+                    bail!("Internal Error: Did not find the `[` in the cluster");
+                }
             },
             (Some(cluster), Some(path), None)
                 if !(cluster
@@ -657,6 +678,7 @@ impl FromStr for ClusterLocation {
             {
                 Ok(ClusterLocation::ClusterFile {
                     cluster: cluster.to_string(),
+                    profile: None,
                     path: path.into(),
                 })
             },
@@ -671,7 +693,16 @@ impl fmt::Display for ClusterLocation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use ClusterLocation::*;
         match self {
-            ClusterFile { cluster, path } => write!(f, "{}#{}", cluster, path.display()),
+            ClusterFile {
+                cluster,
+                profile: None,
+                path,
+            } => write!(f, "{}#{}", cluster, path.display()),
+            ClusterFile {
+                cluster,
+                profile: Some(profile),
+                path,
+            } => write!(f, "{}[{}]#{}", cluster, profile, path.display()),
             FileRef(location) => write!(f, "@#{}", location),
             Other(location) => write!(f, "{}", location),
             Stdio => write!(f, "-"),

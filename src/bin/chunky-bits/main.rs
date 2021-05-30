@@ -359,7 +359,8 @@ async fn run() -> Result<()> {
                             if let Some(file_name) = path.file_name().map(OsStr::to_str).flatten() {
                                 match AnyHash::from_str(file_name) {
                                     Ok(hash) => {
-                                        existing_hashes.entry(hash)
+                                        existing_hashes
+                                            .entry(hash)
                                             .or_insert(Vec::new())
                                             .push(path);
                                     },

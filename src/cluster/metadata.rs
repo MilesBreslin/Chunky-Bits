@@ -77,12 +77,16 @@ impl MetadataTypes {
         path: &Path,
     ) -> Result<impl Stream<Item = io::Result<FileOrDirectory>> + 'static, MetadataReadError> {
         match self {
-            MetadataTypes::Path(meta_path) => {
-                Ok(meta_path.list(path).await.map_err(LocationError::from)?.boxed())
-            },
-            MetadataTypes::Git(meta_git) => {
-                Ok(meta_git.list(path).await.map_err(LocationError::from)?.boxed())
-            },
+            MetadataTypes::Path(meta_path) => Ok(meta_path
+                .list(path)
+                .await
+                .map_err(LocationError::from)?
+                .boxed()),
+            MetadataTypes::Git(meta_git) => Ok(meta_git
+                .list(path)
+                .await
+                .map_err(LocationError::from)?
+                .boxed()),
         }
     }
 }
@@ -225,8 +229,7 @@ impl MetadataGit {
     where
         T: Serialize,
     {
-        let path = Self::check_sub_git_dir(path)
-            .map_err(|err| MetadataReadError::IoError(err))?;
+        let path = Self::check_sub_git_dir(path).map_err(|err| MetadataReadError::IoError(err))?;
         let orig_path: PathBuf = path.as_ref().to_owned();
         let path = self.sub_path(path);
         let payload = self.format.to_string(payload)?;
@@ -279,24 +282,19 @@ impl MetadataGit {
     ) -> io::Result<impl Stream<Item = io::Result<FileOrDirectory>> + 'static> {
         Self::check_sub_git_dir(path)?;
         let stream = self.meta_path.list(path).await?;
-        Ok(stream
-            .filter_map(|result| async move {
-                match result {
-                    Ok(file_or_dir) => {
-                        Ok(Self::check_sub_git_dir(file_or_dir).ok()).transpose()
-                    },
-                    Err(err) => Some(Err(err)),
-                }
-            })
-        )
+        Ok(stream.filter_map(|result| async move {
+            match result {
+                Ok(file_or_dir) => Ok(Self::check_sub_git_dir(file_or_dir).ok()).transpose(),
+                Err(err) => Some(Err(err)),
+            }
+        }))
     }
 
     pub async fn read<T>(&self, path: impl AsRef<Path>) -> Result<T, MetadataReadError>
     where
         T: DeserializeOwned,
     {
-        let path = Self::check_sub_git_dir(path)
-            .map_err(|err| MetadataReadError::IoError(err))?;
+        let path = Self::check_sub_git_dir(path).map_err(|err| MetadataReadError::IoError(err))?;
         self.meta_path.read(path).await
     }
 
@@ -305,7 +303,10 @@ impl MetadataGit {
         T: AsRef<Path>,
     {
         if Self::is_sub_git_dir(path.as_ref()) {
-            Err(io::Error::new(io::ErrorKind::PermissionDenied, "Access to .git is denied"))
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Access to .git is denied",
+            ))
         } else {
             Ok(path)
         }
