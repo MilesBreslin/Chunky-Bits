@@ -58,9 +58,7 @@ impl ClusterProfiles {
                 swap(&mut self.default, &mut profile);
                 Some(profile)
             },
-            Some(name) => {
-                self.custom.insert(name, profile)
-            },
+            Some(name) => self.custom.insert(name, profile),
         }
     }
 
@@ -163,9 +161,24 @@ mod hollow {
             let mut custom: HashMap<String, HollowClusterProfile> = HashMap::new();
             while let Some(key) = map.next_key::<String>()? {
                 if key.eq_ignore_ascii_case("default") {
-                    default = Some(map.next_value()?);
+                    if default.is_none() {
+                        default = Some(map.next_value()?);
+                    } else {
+                        return Err(A::Error::duplicate_field("default"));
+                    }
                 } else {
-                    custom.insert(key, map.next_value()?);
+                    use std::collections::hash_map::Entry;
+                    match custom.entry(key) {
+                        Entry::Vacant(entry) => {
+                            entry.insert(map.next_value()?);
+                        },
+                        Entry::Occupied(entry) => {
+                            return Err(A::Error::custom(format!(
+                                "duplicate field `{}`",
+                                entry.key(),
+                            )));
+                        },
+                    }
                 }
             }
 
