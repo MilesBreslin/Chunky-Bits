@@ -95,9 +95,14 @@ enum Command {
         targets: Vec<ClusterLocation>,
     },
     /// Show the parsed configuration definition
-    ConfigInfo,
+    ConfigInfo {
+        #[structopt(long)]
+        json: bool,
+    },
     /// Show the parsed cluster definition
     ClusterInfo {
+        #[structopt(long)]
+        json: bool,
         /// The name/location of the cluster to show
         cluster: String,
     },
@@ -116,6 +121,8 @@ enum Command {
         targets: Vec<ClusterLocation>,
     },
     FileInfo {
+        #[structopt(long)]
+        json: bool,
         source: ClusterLocation,
     },
     /// Find all hashes that are not referenced
@@ -159,18 +166,14 @@ enum Command {
         destination: ClusterLocation,
     },
     /// Resilver a cluster file
-    Resilver {
-        target: ClusterLocation,
-    },
+    Resilver { target: ClusterLocation },
     /// Verify a cluster file
-    Verify {
-        target: ClusterLocation,
-    },
+    Verify { target: ClusterLocation },
 }
 
 #[tokio::main]
 async fn main() {
-    match run().await {
+    match run(Opt::from_args()).await {
         Ok(_) => {},
         Err(err) => {
             eprintln!("{}", err);
@@ -179,14 +182,14 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<()> {
+async fn run(opts: Opt) -> Result<()> {
     let Opt {
         command,
         config,
         chunk_size,
         data_chunks,
         parity_chunks,
-    } = Opt::from_args();
+    } = opts;
     let config = Config::builder()
         .default_data_chunks(data_chunks)
         .default_parity_chunks(parity_chunks)
@@ -201,14 +204,20 @@ async fn run() -> Result<()> {
                 destination.write_from_reader(&config, &mut reader).await?;
             }
         },
-        Command::ConfigInfo => {
+        Command::ConfigInfo { json } => {
             let config = config.load_or_default().await?;
-            serde_yaml::to_writer(std::io::stdout(), &config)?;
+            match json {
+                true => serde_json::to_writer_pretty(std::io::stdout(), &config)?,
+                false => serde_yaml::to_writer(std::io::stdout(), &config)?,
+            }
         },
-        Command::ClusterInfo { cluster } => {
+        Command::ClusterInfo { cluster, json } => {
             let config = config.load_or_default().await?;
             let cluster = config.get_cluster(&cluster).await?;
-            serde_yaml::to_writer(std::io::stdout(), &cluster)?;
+            match json {
+                true => serde_json::to_writer_pretty(std::io::stdout(), &cluster)?,
+                false => serde_yaml::to_writer(std::io::stdout(), &cluster)?,
+            }
         },
         Command::Cp {
             source,
@@ -296,7 +305,7 @@ async fn run() -> Result<()> {
                 .collect::<Vec<()>>()
                 .await;
         },
-        Command::FileInfo { source } => {
+        Command::FileInfo { source, json } => {
             let config = config.load_or_default().await?;
             let file_ref = source
                 .get_file_reference(
@@ -306,7 +315,11 @@ async fn run() -> Result<()> {
                     config.get_default_chunk_size().await?,
                 )
                 .await?;
-            serde_yaml::to_writer(&mut std::io::stdout(), &file_ref)?;
+
+            match json {
+                true => serde_json::to_writer_pretty(std::io::stdout(), &file_ref)?,
+                false => serde_yaml::to_writer(std::io::stdout(), &file_ref)?,
+            }
         },
         Command::FindUnusedHashes {
             batch_size,
