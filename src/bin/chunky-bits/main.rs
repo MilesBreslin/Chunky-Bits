@@ -40,7 +40,6 @@ use reed_solomon_erasure::{
     galois_8,
     ReedSolomon,
 };
-use structopt::StructOpt;
 use tokio::{
     fs,
     io::{
@@ -54,6 +53,11 @@ pub mod cluster_location;
 pub mod config;
 pub mod error_message;
 pub mod util;
+use clap::{
+    Parser,
+    Subcommand,
+};
+
 use crate::{
     cluster_location::ClusterLocation,
     config::Config,
@@ -69,39 +73,40 @@ use crate::{
 /// for the cluster definition to be read from. Both local
 /// file paths and http URL are supported.
 /// Example `./cluster.yml#path/to/file`.
-#[derive(StructOpt)]
+#[derive(Parser)]
+#[command(version, about)]
 struct Opt {
     /// Location for the config file
-    #[structopt(long)]
+    #[arg(long)]
     config: Option<PathBuf>,
     /// Set the default chunk size for non-cluster destinations
-    #[structopt(long)]
+    #[arg(long)]
     chunk_size: Option<ChunkSize>,
     /// Set the default data chunks for non-cluster destinations
-    #[structopt(long)]
+    #[arg(long)]
     data_chunks: Option<DataChunkCount>,
     /// Set the default parity chunks for non-cluster destinations
-    #[structopt(long)]
+    #[arg(long)]
     parity_chunks: Option<ParityChunkCount>,
-    #[structopt(subcommand)]
+    #[command(subcommand)]
     command: Command,
 }
 
-#[derive(StructOpt)]
+#[derive(Subcommand)]
 enum Command {
     /// Concatenate files together
     Cat {
-        #[structopt(required(true), min_values(1))]
+        #[arg(required(true))]
         targets: Vec<ClusterLocation>,
     },
     /// Show the parsed configuration definition
     ConfigInfo {
-        #[structopt(long)]
+        #[arg(long)]
         json: bool,
     },
     /// Show the parsed cluster definition
     ClusterInfo {
-        #[structopt(long)]
+        #[arg(long)]
         json: bool,
         /// The name/location of the cluster to show
         cluster: String,
@@ -112,37 +117,37 @@ enum Command {
         destination: ClusterLocation,
     },
     DecodeShards {
-        #[structopt(required(true), min_values(1))]
+        #[arg(required(true))]
         targets: Vec<ClusterLocation>,
     },
     EncodeShards {
         source: ClusterLocation,
-        #[structopt(required(true), min_values(1))]
+        #[arg(required(true))]
         targets: Vec<ClusterLocation>,
     },
     FileInfo {
-        #[structopt(long)]
+        #[arg(long)]
         json: bool,
         source: ClusterLocation,
     },
     /// Find all hashes that are not referenced
     FindUnusedHashes {
-        #[structopt(long, default_value = "100000")]
+        #[arg(long, default_value = "100000")]
         batch_size: usize,
-        #[structopt(short, long)]
+        #[arg(short, long)]
         remove: bool,
-        #[structopt(required(true), min_values(1))]
+        #[arg(required(true))]
         source: Vec<ClusterLocation>,
-        #[structopt(last(true), required(true), min_values(1))]
+        #[arg(last(true), required(true))]
         hashes: Vec<ClusterLocation>,
     },
     /// Get all the known hashes for a location
     GetHashes {
         /// Deduplicate all hashes
-        #[structopt(short, long = "dedup")]
+        #[arg(short, long = "dedup")]
         deduplicate: bool,
         /// Sort all hashes (Implies --dedup)
-        #[structopt(short, long)]
+        #[arg(short, long)]
         sort: bool,
         target: ClusterLocation,
     },
@@ -151,12 +156,12 @@ enum Command {
         /// The name/location of the cluster to show
         cluster: String,
         /// Listen Address to bind to
-        #[structopt(short, long, default_value = "127.0.0.1:8000")]
+        #[arg(short, long, default_value = "127.0.0.1:8000")]
         listen_addr: SocketAddr,
     },
     /// List the files in a cluster directory
     Ls {
-        #[structopt(short, long)]
+        #[arg(short, long)]
         recursive: bool,
         target: ClusterLocation,
     },
@@ -173,7 +178,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() {
-    match run(Opt::from_args()).await {
+    match run(Opt::parse()).await {
         Ok(_) => {},
         Err(err) => {
             eprintln!("{}", err);

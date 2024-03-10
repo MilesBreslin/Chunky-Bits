@@ -143,7 +143,7 @@ where
                     pending_part = part_rx.recv(), if more_parts => {
                         match pending_part {
                             Some(pending_part) => {
-                                pending_parts.push(pending_part);
+                                pending_parts.push_back(pending_part);
                             },
                             None => {
                                 more_parts = false
